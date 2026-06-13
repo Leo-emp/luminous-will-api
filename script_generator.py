@@ -104,6 +104,11 @@ OUTPUT FORMAT — respond with ONLY a JSON array, no markdown, no explanation:
   {{
     "text": "The sentence spoken in the voiceover.",
     "visual_keywords": "5-6 keywords for stock footage search (landscape orientation, dark cinematic)",
+    "visual_keywords_alt": [
+      "alternative search query 1 — different angle on same visual concept",
+      "alternative search query 2 — broader or abstract version",
+      "alternative search query 3 — concrete subject that matches the mood"
+    ],
     "mood": "dark|intense|reflective|powerful",
     "emphasis_words": ["one", "key", "word"],
     "chapter": "Chapter Title Here or null"
@@ -116,6 +121,13 @@ VISUAL KEYWORD RULES:
 - Use landscape-oriented subjects: cityscapes, mountains, oceans, highways, architecture, storms
 - Vary the subjects — no two consecutive segments should have the same visual theme
 - Preferred subjects: dark cityscape night, storm clouds dramatic, mountain peak dark, ocean waves cinematic, businessman walking dark, wolf forest night, lion savanna dark, chess board dark, gym training dark, running athlete silhouette
+
+VISUAL KEYWORDS ALT RULES:
+- Each alt query should be a DIFFERENT way to find footage that matches this segment's meaning
+- Alt 1: rephrase the main query with different synonyms (e.g. "dark city skyline night" vs "urban nightscape cinematic")
+- Alt 2: zoom out to a broader concept (e.g. "dark atmospheric landscape" for a power segment)
+- Alt 3: use a concrete, searchable subject (e.g. "wolf standing alone dark forest" for a solitude segment)
+- All alts must still match the dark/cinematic brand — no bright, happy, colorful subjects
 
 Generate the script now. 50 segments, JSON array only."""
 
@@ -135,9 +147,14 @@ Generate the script now. 50 segments, JSON array only."""
         # Validate and normalize segment structure
         validated = []
         for seg in segments:
+            # --- Parse alt keywords: list of 3 alternative search queries ---
+            raw_alts = seg.get("visual_keywords_alt", [])
+            alts = [str(a) for a in raw_alts if a] if isinstance(raw_alts, list) else []
+
             validated.append({
                 "text": str(seg.get("text", "")),
                 "visual_keywords": str(seg.get("visual_keywords", "dark cinematic landscape")),
+                "visual_keywords_alt": alts,
                 "emphasis_word": seg.get("emphasis_words", [""])[0] if seg.get("emphasis_words") else "",
                 "mood": str(seg.get("mood", "dark")),
                 "chapter": seg.get("chapter"),
