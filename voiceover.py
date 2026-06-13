@@ -10,7 +10,7 @@ import config
 # ============================================================
 
 
-def generate_voiceover(script_text, output_path):
+def generate_voiceover(script_text, output_path, profile=None):
     """
     # Generates voiceover audio from script text using ElevenLabs
     # Returns word-level timestamps for caption syncing
@@ -18,6 +18,7 @@ def generate_voiceover(script_text, output_path):
     # Args:
     #   script_text: full script as a single string
     #   output_path: where to save the .mp3 file
+    #   profile: optional dict with format-specific voice settings (e.g. voice_stability)
     #
     # Returns:
     #   list of dicts with keys: word, start, end (times in seconds)
@@ -34,11 +35,15 @@ def generate_voiceover(script_text, output_path):
         "Content-Type": "application/json",
     }
 
+    # Use profile stability if provided, else default
+    voice_settings = dict(config.VOICE_SETTINGS)
+    if profile and "voice_stability" in profile:
+        voice_settings["stability"] = profile["voice_stability"]
+
     payload = {
         "text": script_text,
         "model_id": config.ELEVENLABS_MODEL_ID,
-        "voice_settings": config.VOICE_SETTINGS,
-        # Speed control: 0.83 as specified
+        "voice_settings": voice_settings,
         "speed": config.VOICE_SPEED,
     }
 

@@ -37,15 +37,16 @@ AVOID_KEYWORDS = [
 ]
 
 
-def search_and_download_videos(script_segments, output_dir):
+def search_and_download_videos(script_segments, output_dir, profile=None):
     """
     # For each script segment, searches Pexels + Pixabay for matching footage
     # Alternates between sources for variety, uses the other as fallback
-    # Downloads the best vertical (9:16) clip for each segment
+    # Downloads the best vertical (9:16) or landscape (16:9) clip per segment
     #
     # Args:
     #   script_segments: list of script dicts with 'visual_keywords'
     #   output_dir: directory to save downloaded clips
+    #   profile: optional format profile dict (contains pexels_orientation, etc.)
     #
     # Returns:
     #   list of file paths to downloaded video clips
@@ -65,6 +66,22 @@ def search_and_download_videos(script_segments, output_dir):
         print("[VISUALS] ERROR: No API keys configured for Pexels or Pixabay!")
         return []
 
+    # Format-specific search orientation
+    orientation = profile["pexels_orientation"] if profile else config.PEXELS_ORIENTATION
+
+    # Expanded fallback queries for landscape
+    if orientation == "landscape":
+        landscape_fallbacks = [
+            "dark cityscape night skyline", "mountain peak dark clouds dramatic",
+            "ocean waves dark cinematic", "dark highway driving night",
+            "storm clouds dramatic sky", "dark forest aerial cinematic",
+            "modern architecture night dark", "dark desert landscape cinematic",
+            "river dark moody cinematic", "dark stadium empty cinematic",
+            "dark bridge night lights", "rain dark street cinematic",
+        ]
+    else:
+        landscape_fallbacks = None
+
     for i, segment in enumerate(script_segments):
         keywords = segment["visual_keywords"]
         print(f"[VISUALS] ({i+1}/{len(script_segments)}) Searching: {keywords}")
@@ -75,7 +92,7 @@ def search_and_download_videos(script_segments, output_dir):
         # This gives maximum variety across both stock libraries
         if i % 2 == 0 and has_pexels:
             # --- Try Pexels first, then Pixabay fallback ---
-            video_path = search_pexels_one(keywords, output_dir, i, used_pexels_ids)
+            video_path = search_pexels_one(keywords, output_dir, i, used_pexels_ids, orientation)
             if not video_path and has_pixabay:
                 print(f"[VISUALS] Pexels miss, trying Pixabay...")
                 video_path = search_pixabay_one(keywords, output_dir, i, used_pixabay_ids)
@@ -84,10 +101,10 @@ def search_and_download_videos(script_segments, output_dir):
             video_path = search_pixabay_one(keywords, output_dir, i, used_pixabay_ids)
             if not video_path and has_pexels:
                 print(f"[VISUALS] Pixabay miss, trying Pexels...")
-                video_path = search_pexels_one(keywords, output_dir, i, used_pexels_ids)
+                video_path = search_pexels_one(keywords, output_dir, i, used_pexels_ids, orientation)
         elif has_pexels:
             # --- Only Pexels available ---
-            video_path = search_pexels_one(keywords, output_dir, i, used_pexels_ids)
+            video_path = search_pexels_one(keywords, output_dir, i, used_pexels_ids, orientation)
 
         # --- Fallback: try simpler keywords on both sources ---
         if not video_path:
@@ -95,20 +112,21 @@ def search_and_download_videos(script_segments, output_dir):
             fallback_query = " ".join(simple_keywords)
             print(f"[VISUALS] Trying simpler query: {fallback_query}")
             if has_pexels:
-                video_path = search_pexels_one(fallback_query, output_dir, i, used_pexels_ids)
+                video_path = search_pexels_one(fallback_query, output_dir, i, used_pexels_ids, orientation)
             if not video_path and has_pixabay:
                 video_path = search_pixabay_one(fallback_query, output_dir, i, used_pixabay_ids)
 
-        # --- Last resort: premium sigma aesthetic fallback queries ---
+        # --- Last resort: format-specific fallback queries ---
         if not video_path:
-            for fallback in [
+            fallbacks = landscape_fallbacks if landscape_fallbacks else [
                 "businessman suit dark", "luxury car night", "man walking alone city night",
                 "dark gym workout", "boxing training dark", "running athlete dark",
                 "modern skyscraper night", "dark cinematic portrait", "chess dark dramatic",
                 "wolf dark forest", "dark ocean waves", "man rooftop city night",
-            ]:
+            ]
+            for fallback in fallbacks:
                 if has_pexels:
-                    video_path = search_pexels_one(fallback, output_dir, i, used_pexels_ids)
+                    video_path = search_pexels_one(fallback, output_dir, i, used_pexels_ids, orientation)
                 if not video_path and has_pixabay:
                     video_path = search_pixabay_one(fallback, output_dir, i, used_pixabay_ids)
                 if video_path:
@@ -129,10 +147,13 @@ def search_and_download_videos(script_segments, output_dir):
 # PEXELS SEARCH + DOWNLOAD
 # ============================================================
 
-def search_pexels_one(query, output_dir, index, used_ids):
+def search_pexels_one(query, output_dir, index, used_ids, orientation=None):
     """
     # Searches Pexels and downloads one matching video clip
-    # Prefers portrait orientation and high resolution
+    # Orientation is format-aware: portrait (9:16) or landscape (16:9)
+    #
+    # Args:
+    #   orientation: "portrait" or "landscape" (falls back to config default)
     #
     # Returns: file path of downloaded clip, or None
     """
@@ -142,8 +163,8 @@ def search_pexels_one(query, output_dir, index, used_ids):
     headers = {"Authorization": config.PEXELS_API_KEY}
     params = {
         "query": query,
-        "orientation": config.PEXELS_ORIENTATION,  # portrait for 9:16
-        "size": config.PEXELS_SIZE,                # large/high quality
+        "orientation": orientation or config.PEXELS_ORIENTATION,  # format-aware
+        "size": config.PEXELS_SIZE,                               # large/high quality
         "per_page": config.PEXELS_PER_PAGE,
     }
 

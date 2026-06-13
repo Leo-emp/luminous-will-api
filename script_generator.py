@@ -1,5 +1,7 @@
 import random
+import json
 import config
+import google.generativeai as genai
 
 # ============================================================
 # SCRIPT GENERATOR
@@ -33,31 +35,190 @@ HOOK_TEMPLATES = [
 ]
 
 
-def generate_script(topic=None, custom_hook=None):
+def generate_script(topic=None, custom_hook=None, video_format=None):
     """
-    # Generates a full video script with:
-    # 1. A punchy hook (first 2 seconds)
-    # 2. Main content broken into caption-friendly segments
-    # 3. A strong closing line
+    # Generates a video script based on the format:
+    #   - VERTICAL_SHORT: template-based (existing behavior)
+    #   - HORIZONTAL_LONG: Gemini AI-generated (8-12 min)
     #
-    # Returns a list of script segments, each with:
-    #   - text: the spoken words
-    #   - visual_keywords: what footage to search for
-    #   - emphasis_word: the word to highlight in captions
+    # Returns (segments_list, topic_string)
     """
 
-    # --- Pick a random topic if none given ---
+    # Import here to avoid circular import
+    from config import VideoFormat
+
+    if video_format == VideoFormat.HORIZONTAL_LONG:
+        return generate_long_script(topic)
+
+    # --- Default: short-form template script ---
     if topic is None:
         topic = random.choice(config.TRENDING_TOPICS)
 
     print(f"[SCRIPT] Generating script for: {topic}")
-
-    # --- This is a TEMPLATE script generator ---
-    # For production, replace this with an LLM API call
-    # The structure below shows the exact format needed
     script = get_template_script(topic)
-
     return script, topic
+
+
+def generate_long_script(topic=None):
+    """
+    # Generates an 8-12 minute script using Gemini AI
+    # Returns 40-60 segments with narrative arc structure:
+    #   hook -> setup -> escalation -> climax -> resolution -> callback
+    # Each segment includes visual keywords and chapter markers
+    """
+
+    if topic is None:
+        topic = random.choice(config.TRENDING_TOPICS)
+
+    print(f"[SCRIPT] Generating long-form script for: {topic}")
+
+    if not config.GEMINI_API_KEY:
+        print("[SCRIPT] WARNING: No Gemini API key, falling back to chained templates")
+        return _chain_template_scripts(topic), topic
+
+    genai.configure(api_key=config.GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-2.5-flash")
+
+    prompt = f"""You are a scriptwriter for the YouTube channel "Luminous Will" — dark motivation, stoic philosophy, psychology of power.
+
+VOICE RULES:
+- Stoic, commanding, no-nonsense. Short punchy sentences even in long form.
+- No fluff, no clichés ("grind", "hustle", "manifest"), no questions to the audience.
+- Speak in universal truths. Never say "I" or "we". Use "you" and "they".
+- Dark, intense energy. The tone of someone who has seen the worst and emerged stronger.
+
+STRUCTURE for an 8-12 minute script on "{topic}":
+1. HOOK (first 30 seconds) — One shocking statement that stops the scroll
+2. SETUP (1-2 min) — Frame the problem, make it personal
+3. ESCALATION (3-4 min) — Go deeper, reveal uncomfortable truths, build intensity
+4. CLIMAX (2-3 min) — The turning point, the harsh lesson, the wake-up call
+5. RESOLUTION (1-2 min) — The path forward, actionable transformation
+6. CALLBACK (30 seconds) — Circle back to the opening hook with new meaning
+
+Generate exactly 50 segments. Each segment is ONE sentence (max 20 words).
+
+CHAPTER MARKERS: Insert a chapter title every 6-8 segments (for YouTube chapters). Set chapter to null for non-chapter segments.
+
+OUTPUT FORMAT — respond with ONLY a JSON array, no markdown, no explanation:
+[
+  {{
+    "text": "The sentence spoken in the voiceover.",
+    "visual_keywords": "5-6 keywords for stock footage search (landscape orientation, dark cinematic)",
+    "mood": "dark|intense|reflective|powerful",
+    "emphasis_words": ["one", "key", "word"],
+    "chapter": "Chapter Title Here or null"
+  }},
+  ...
+]
+
+VISUAL KEYWORD RULES:
+- Always include "dark" or "cinematic" in keywords
+- Use landscape-oriented subjects: cityscapes, mountains, oceans, highways, architecture, storms
+- Vary the subjects — no two consecutive segments should have the same visual theme
+- Preferred subjects: dark cityscape night, storm clouds dramatic, mountain peak dark, ocean waves cinematic, businessman walking dark, wolf forest night, lion savanna dark, chess board dark, gym training dark, running athlete silhouette
+
+Generate the script now. 50 segments, JSON array only."""
+
+    try:
+        response = model.generate_content(prompt)
+        raw_text = response.text.strip()
+
+        # Strip markdown code fences if present
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("\n", 1)[1]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+            raw_text = raw_text.strip()
+
+        segments = json.loads(raw_text)
+
+        # Validate and normalize segment structure
+        validated = []
+        for seg in segments:
+            validated.append({
+                "text": str(seg.get("text", "")),
+                "visual_keywords": str(seg.get("visual_keywords", "dark cinematic landscape")),
+                "emphasis_word": seg.get("emphasis_words", [""])[0] if seg.get("emphasis_words") else "",
+                "mood": str(seg.get("mood", "dark")),
+                "chapter": seg.get("chapter"),
+            })
+
+        if len(validated) < 30:
+            print(f"[SCRIPT] WARNING: Only {len(validated)} segments generated, expected 40-60")
+
+        print(f"[SCRIPT] Generated {len(validated)} segments via Gemini")
+
+        # Count chapters
+        chapters = [s for s in validated if s.get("chapter")]
+        print(f"[SCRIPT] Chapters: {len(chapters)}")
+
+        return validated, topic
+
+    except json.JSONDecodeError as e:
+        print(f"[SCRIPT] JSON parse error from Gemini: {e}")
+        print(f"[SCRIPT] Raw response (first 500 chars): {raw_text[:500]}")
+        print("[SCRIPT] Falling back to chained templates")
+        return _chain_template_scripts(topic), topic
+
+    except Exception as e:
+        print(f"[SCRIPT] Gemini API error: {e}")
+        print("[SCRIPT] Falling back to chained templates")
+        return _chain_template_scripts(topic), topic
+
+
+def _chain_template_scripts(topic):
+    """
+    # Fallback: chains multiple template scripts together for long-form
+    # Used when Gemini API is unavailable
+    """
+    available_scripts = []
+    for t in config.TRENDING_TOPICS:
+        script = get_template_script(t)
+        if len(script) > 0:
+            available_scripts.append(script)
+
+    # Shuffle and take enough to fill 8-12 minutes (~50 segments)
+    random.shuffle(available_scripts)
+    chained = []
+    for script in available_scripts:
+        chained.extend(script)
+        if len(chained) >= 45:
+            break
+
+    return chained
+
+
+def extract_chapters(script_segments, caption_events):
+    """
+    # Extracts YouTube chapter markers from long-form script segments
+    # Returns list of {time: "M:SS", title: str} for video description
+    """
+    chapters = []
+    word_index = 0
+
+    for seg in script_segments:
+        if seg.get("chapter"):
+            # Find the timestamp for this segment
+            if word_index < len(caption_events):
+                start_time = caption_events[word_index]["start"] if caption_events else 0
+            else:
+                start_time = 0
+
+            minutes = int(start_time // 60)
+            seconds = int(start_time % 60)
+            chapters.append({
+                "time": f"{minutes}:{seconds:02d}",
+                "title": seg["chapter"],
+                "seconds": start_time,
+            })
+
+        word_index += 1
+
+    # Ensure first chapter starts at 0:00
+    if chapters and chapters[0]["seconds"] > 0:
+        chapters.insert(0, {"time": "0:00", "title": "Introduction", "seconds": 0})
+
+    return chapters
 
 
 def get_template_script(topic):

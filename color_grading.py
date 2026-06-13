@@ -90,3 +90,50 @@ def apply_dark_grade_filter(get_frame, t):
     # Use with clip.transform(apply_dark_grade_filter)
     """
     return apply_dark_grade(get_frame(t))
+
+
+def create_grader(profile):
+    """
+    # Returns a grading function calibrated to the format profile's
+    # brightness and saturation settings
+    """
+    brightness = profile.get("brightness_factor", config.BRIGHTNESS_FACTOR)
+    saturation = profile.get("saturation_factor", config.SATURATION_FACTOR)
+
+    def grade_frame(frame):
+        img = frame.astype(np.float32) / 255.0
+
+        img *= brightness
+
+        lum = np.float32(0.299) * img[:,:,0] + np.float32(0.587) * img[:,:,1] + np.float32(0.114) * img[:,:,2]
+        for c in range(3):
+            img[:,:,c] = lum + np.float32(saturation) * (img[:,:,c] - lum)
+        del lum
+
+        midpoint = np.float32(0.25)
+        img = midpoint + np.float32(config.CONTRAST_FACTOR) * (img - midpoint)
+
+        mask = img < 0.08
+        img[mask] *= np.float32(0.3)
+
+        avg = img.mean(axis=-1)
+        shadow_px = avg < 0.25
+        img[:,:,2][shadow_px] += np.float32(0.04)
+        hi_px = avg > 0.5
+        img[:,:,0][hi_px] += np.float32(0.03)
+        img[:,:,1][hi_px] += np.float32(0.015)
+        del avg, shadow_px, hi_px
+
+        h, w = img.shape[:2]
+        Y = np.linspace(-1, 1, h, dtype=np.float32)
+        X = np.linspace(-1, 1, w, dtype=np.float32)
+        dist = np.sqrt(Y[:,None]**2 + X[None,:]**2)
+        vignette = np.float32(1.0) - np.float32(0.3) * np.clip(dist - 0.5, 0, 1)
+        for c in range(3):
+            img[:,:,c] *= vignette
+        del dist, vignette
+
+        np.clip(img, 0, 1, out=img)
+        return (img * 255).astype(np.uint8)
+
+    return grade_frame
