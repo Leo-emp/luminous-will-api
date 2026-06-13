@@ -43,12 +43,16 @@ def validate_setup():
     return True, "All checks passed"
 
 
-def generate_video(topic, progress=gr.Progress()):
-    # --- Main pipeline: generates a complete Luminous Will video ---
+def generate_video(topic, video_format_str="short", progress=gr.Progress()):
+    # --- Main pipeline with format support ---
+
+    from config import VideoFormat, get_format_profile
+
+    fmt = VideoFormat.HORIZONTAL_LONG if video_format_str == "long" else VideoFormat.VERTICAL_SHORT
+    profile = get_format_profile(fmt)
 
     start_time = time.time()
 
-    # --- Step 0: Validate ---
     progress(0.0, desc="Checking setup...")
     ok, msg = validate_setup()
     if not ok:
@@ -56,11 +60,10 @@ def generate_video(topic, progress=gr.Progress()):
 
     validate_references()
 
-    # --- Step 1: Generate script ---
     progress(0.05, desc="Generating script...")
     if not topic or topic.strip() == "":
         topic = None
-    script_segments, topic = generate_script(topic)
+    script_segments, topic = generate_script(topic, video_format=fmt)
     full_script = get_script_text(script_segments)
 
     safe_topic = topic.replace(" ", "_").replace("'", "")[:50]
@@ -69,32 +72,27 @@ def generate_video(topic, progress=gr.Progress()):
     video_temp = os.path.join(config.TEMP_DIR, video_name)
     os.makedirs(video_temp, exist_ok=True)
 
-    # --- Step 2: Generate voiceover ---
     progress(0.10, desc="Creating voiceover (ElevenLabs)...")
     voiceover_path = os.path.join(video_temp, "voiceover.mp3")
-    word_timestamps = generate_voiceover(full_script, voiceover_path)
+    word_timestamps = generate_voiceover(full_script, voiceover_path, profile=profile)
     audio_duration = get_audio_duration(voiceover_path)
 
-    # --- Step 3: Download stock footage ---
     progress(0.25, desc="Downloading stock footage...")
     clips_dir = os.path.join(video_temp, "clips")
-    clip_paths = search_and_download_videos(script_segments, clips_dir)
+    clip_paths = search_and_download_videos(script_segments, clips_dir, profile=profile)
 
     if not clip_paths:
         raise gr.Error("No footage downloaded. Check Pexels/Pixabay API keys.")
 
-    # --- Step 4: Build captions ---
     progress(0.45, desc="Building word-synced captions...")
     caption_events = create_caption_clips(word_timestamps, script_segments, audio_duration)
 
-    # --- Step 5: Find or download music ---
     progress(0.50, desc="Getting background music...")
     music_path = find_background_music()
     if not music_path:
         music_path = download_background_music()
 
-    # --- Step 6: Assemble video ---
-    progress(0.55, desc="Assembling video (color grading + captions + music)...")
+    progress(0.55, desc="Assembling video...")
     output_path = os.path.join(config.OUTPUT_DIR, f"{video_name}.mp4")
 
     assemble_video(
@@ -104,16 +102,16 @@ def generate_video(topic, progress=gr.Progress()):
         script_segments=script_segments,
         music_path=music_path,
         output_path=output_path,
+        video_format=fmt,
     )
 
-    # --- Cleanup temp files ---
     progress(0.95, desc="Cleaning up...")
     shutil.rmtree(video_temp, ignore_errors=True)
 
     elapsed = time.time() - start_time
     progress(1.0, desc=f"Done! ({elapsed:.0f}s)")
 
-    return output_path, f"**{topic}**\n\nGenerated in {elapsed:.0f} seconds | {len(script_segments)} segments | {audio_duration:.0f}s voiceover"
+    return output_path, f"**{topic}** ({fmt.value})\n\nGenerated in {elapsed:.0f} seconds | {len(script_segments)} segments | {audio_duration:.0f}s voiceover"
 
 
 # ============================================================
@@ -157,6 +155,12 @@ with gr.Blocks(
 
     with gr.Row():
         with gr.Column(scale=1):
+            format_dropdown = gr.Dropdown(
+                choices=["Vertical Short (9:16)", "Horizontal Long (16:9)"],
+                value="Vertical Short (9:16)",
+                label="Video Format",
+                info="Short = 60-90s for Reels/TikTok. Long = 8-12 min for YouTube.",
+            )
             topic_dropdown = gr.Dropdown(
                 choices=["(Random)"] + config.TRENDING_TOPICS,
                 value="(Random)",
@@ -178,16 +182,16 @@ with gr.Blocks(
             video_output = gr.Video(label="Generated Video")
             info_output = gr.Markdown(label="Details")
 
-    def on_generate(dropdown_topic, custom, progress=gr.Progress()):
-        # --- Use custom topic if provided, else dropdown ---
+    def on_generate(format_choice, dropdown_topic, custom, progress=gr.Progress()):
         topic = custom.strip() if custom and custom.strip() else None
         if topic is None and dropdown_topic and dropdown_topic != "(Random)":
             topic = dropdown_topic
-        return generate_video(topic, progress)
+        fmt_str = "long" if "Long" in format_choice else "short"
+        return generate_video(topic, fmt_str, progress)
 
     generate_btn.click(
         fn=on_generate,
-        inputs=[topic_dropdown, custom_topic],
+        inputs=[format_dropdown, topic_dropdown, custom_topic],
         outputs=[video_output, info_output],
     )
 
