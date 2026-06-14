@@ -183,6 +183,97 @@ Generate the script now. 50 segments, JSON array only."""
         return _chain_template_scripts(topic), topic
 
 
+def enrich_visual_keywords(segments):
+    """
+    # Batch-enriches ALL segments with alt visual keywords using Gemini
+    # Works for both short-form (templates) and long-form (Gemini scripts)
+    # Skips segments that already have visual_keywords_alt
+    # One API call for the entire video — efficient and consistent
+    #
+    # Returns: the same segments list with visual_keywords_alt populated
+    """
+
+    # --- Find segments missing alt keywords ---
+    needs_enrichment = []
+    for i, seg in enumerate(segments):
+        if not seg.get("visual_keywords_alt"):
+            needs_enrichment.append((i, seg))
+
+    if not needs_enrichment:
+        print("[SCRIPT] All segments already have alt keywords, skipping enrichment")
+        return segments
+
+    if not config.GEMINI_API_KEY:
+        print("[SCRIPT] No Gemini API key, skipping visual keyword enrichment")
+        return segments
+
+    print(f"[SCRIPT] Enriching {len(needs_enrichment)} segments with alt visual keywords...")
+
+    genai.configure(api_key=config.GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-2.5-flash")
+
+    # --- Build the batch prompt with all segments that need alts ---
+    segment_list = []
+    for idx, seg in needs_enrichment:
+        segment_list.append({
+            "index": idx,
+            "text": seg.get("text", ""),
+            "visual_keywords": seg.get("visual_keywords", ""),
+        })
+
+    prompt = f"""You are a visual director for "Luminous Will" — a dark motivation YouTube channel.
+
+For each script segment below, generate 3 ALTERNATIVE stock footage search queries.
+Each alt must find footage that visually matches the spoken text and mood.
+
+RULES:
+- Every query MUST include "dark" or "cinematic" or "night" or "shadow"
+- Alt 1: Rephrase the original keywords with different synonyms
+- Alt 2: Zoom out to a broader atmospheric concept
+- Alt 3: Use a specific, concrete subject that metaphorically matches the text
+- NEVER use: bright, colorful, happy, sunny, cartoon, kids, cute, funny
+- Keep each query 4-6 words for best stock footage search results
+- Preferred visual subjects: silhouettes, storms, wolves, lions, chess, suits, cityscapes, oceans, mountains, gyms, boxing, architecture, rain, fire, smoke
+
+SEGMENTS:
+{json.dumps(segment_list, indent=2)}
+
+OUTPUT FORMAT — respond with ONLY a JSON array, no markdown:
+[
+  {{"index": 0, "alts": ["alt query 1", "alt query 2", "alt query 3"]}},
+  ...
+]"""
+
+    try:
+        response = model.generate_content(prompt)
+        raw_text = response.text.strip()
+
+        # Strip markdown code fences if present
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("\n", 1)[1]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+            raw_text = raw_text.strip()
+
+        enrichments = json.loads(raw_text)
+
+        # --- Apply enrichments back to original segments ---
+        enrichment_map = {e["index"]: e.get("alts", []) for e in enrichments}
+        applied = 0
+        for idx, alts in enrichment_map.items():
+            if 0 <= idx < len(segments) and alts:
+                segments[idx]["visual_keywords_alt"] = [str(a) for a in alts[:3]]
+                applied += 1
+
+        print(f"[SCRIPT] Enriched {applied}/{len(needs_enrichment)} segments with alt keywords")
+
+    except Exception as e:
+        print(f"[SCRIPT] Visual keyword enrichment failed: {e}")
+        print("[SCRIPT] Continuing with primary keywords only")
+
+    return segments
+
+
 def _chain_template_scripts(topic):
     """
     # Fallback: chains multiple template scripts together for long-form

@@ -4,6 +4,7 @@ import time
 import random
 import re
 import config
+from script_generator import enrich_visual_keywords
 
 # ============================================================
 # VISUAL SOURCER
@@ -308,6 +309,10 @@ def search_and_download_videos(script_segments, output_dir, profile=None):
     if not has_pexels and not has_pixabay:
         print("[VISUALS] ERROR: No API keys configured for Pexels or Pixabay!")
         return []
+
+    # --- Enrich all segments with alt keywords via Gemini (one batch call) ---
+    # This ensures both short-form and long-form get multi-query semantic matching
+    script_segments = enrich_visual_keywords(script_segments)
 
     # Format-specific search orientation
     orientation = profile["pexels_orientation"] if profile else config.PEXELS_ORIENTATION
