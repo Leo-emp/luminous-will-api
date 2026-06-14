@@ -9,7 +9,7 @@ from visuals import search_and_download_videos
 from captions import create_caption_clips
 from video_assembler import assemble_video
 from brand_reference import validate_references, VIDEO_SPECS
-from music import download_background_music
+from music import select_music
 
 # ============================================================
 # LUMINOUS WILL - CLOUD VIDEO PIPELINE (Gradio API)
@@ -18,14 +18,6 @@ from music import download_background_music
 # ============================================================
 
 
-def find_background_music():
-    # --- Check for cached music in /tmp ---
-    if not os.path.exists(config.MUSIC_DIR):
-        return None
-    for f in os.listdir(config.MUSIC_DIR):
-        if f.endswith((".mp3", ".wav", ".m4a")):
-            return os.path.join(config.MUSIC_DIR, f)
-    return None
 
 
 def validate_setup():
@@ -87,10 +79,8 @@ def generate_video(topic, video_format_str="short", progress=gr.Progress()):
     progress(0.45, desc="Building word-synced captions...")
     caption_events = create_caption_clips(word_timestamps, script_segments, audio_duration)
 
-    progress(0.50, desc="Getting background music...")
-    music_path = find_background_music()
-    if not music_path:
-        music_path = download_background_music()
+    progress(0.50, desc="Selecting background music...")
+    music_path = select_music(script_segments)
 
     progress(0.55, desc="Assembling video...")
     output_path = os.path.join(config.OUTPUT_DIR, f"{video_name}.mp4")
