@@ -1,91 +1,226 @@
 import os
-import requests
 import random
+import requests
 import config
 
 # ============================================================
-# MUSIC DOWNLOADER
-# Downloads dramatic/motivational background music from Freesound
-# Freesound has a proper API that supports audio search + download
-# Tracks are Creative Commons licensed - free to use
+# MUSIC SELECTOR
+# Picks the best background music for each video based on mood
 #
-# Searches for dark cinematic, dramatic, epic, motivational
-# tracks that match the Luminous Will brand aesthetic
+# TRACK ORGANIZATION:
+#   Option A — Mood subfolders:
+#     assets/music/dark/       → brooding, noir, suspenseful
+#     assets/music/intense/    → aggressive, powerful, battle-ready
+#     assets/music/reflective/ → thoughtful, stoic, contemplative
+#     assets/music/powerful/   → triumphant, epic, commanding
+#     assets/music/general/    → works for any mood
+#
+#   Option B — Mood tags in filename:
+#     assets/music/track_name__dark.mp3
+#     assets/music/epic_orchestral__intense.mp3
+#     (double underscore before mood tag)
+#
+#   Option C — Flat folder (no mood info):
+#     assets/music/any_track.mp3
+#     → treated as "general", picked randomly
+#
+# HOW MOOD IS DETERMINED:
+#   1. Count mood tags from all script segments
+#   2. Pick the dominant mood
+#   3. Select a track from that mood's pool
+#   4. If no mood-specific tracks exist, use general/any pool
+#   5. If no local tracks at all, fall back to Freesound API
 # ============================================================
 
-# --- Search queries to find on-brand background music ---
-# These are tried in order until a suitable track is found
-# --- Prioritize intense, powerful, dramatic tracks ---
-MUSIC_SEARCH_QUERIES = [
-    "intense epic cinematic trailer",
-    "powerful dramatic orchestral dark",
-    "epic battle cinematic orchestra",
-    "dark intense motivational cinematic",
-    "dramatic powerful trailer music",
-    "epic cinematic war orchestral",
-    "intense dark orchestral dramatic",
-    "powerful epic motivational orchestra",
-]
+# --- Valid mood categories (must match script_generator output) ---
+VALID_MOODS = {"dark", "intense", "reflective", "powerful"}
+
+# --- Freesound search queries per mood ---
+# Used only as last-resort fallback when no local tracks exist
+FREESOUND_MOOD_QUERIES = {
+    "dark": [
+        "dark ambient cinematic suspense",
+        "noir dramatic tension dark",
+        "dark cinematic brooding orchestra",
+    ],
+    "intense": [
+        "intense epic cinematic trailer",
+        "powerful dramatic orchestral dark",
+        "epic battle cinematic orchestra",
+    ],
+    "reflective": [
+        "reflective cinematic piano dark",
+        "contemplative orchestral ambient",
+        "stoic calm cinematic dark piano",
+    ],
+    "powerful": [
+        "powerful epic triumphant orchestra",
+        "commanding cinematic dramatic buildup",
+        "epic motivational orchestral dark",
+    ],
+}
 
 
-def download_background_music(output_dir=None):
+def get_dominant_mood(script_segments):
     """
-    # Searches Freesound for a dramatic/motivational background track
-    # Downloads it to the assets/music/ folder
+    # Counts mood tags across all segments and returns the most common one
+    # Falls back to "intense" if no moods found (safest for dark motivation)
+    """
+    mood_counts = {m: 0 for m in VALID_MOODS}
+
+    for seg in script_segments:
+        mood = seg.get("mood", "").lower().strip()
+        if mood in mood_counts:
+            mood_counts[mood] += 1
+
+    if not any(mood_counts.values()):
+        return "intense"
+
+    return max(mood_counts, key=mood_counts.get)
+
+
+def scan_local_tracks(music_dir=None):
+    """
+    # Scans assets/music/ for tracks and organizes them by mood
+    # Supports both subfolder and filename-tag organization
     #
-    # Returns: path to the downloaded .mp3 file, or None
+    # Returns: dict of {mood: [file_path, ...]}
     """
+    if music_dir is None:
+        music_dir = config.MUSIC_DIR
 
-    # --- Use the assets/music folder by default ---
-    if output_dir is None:
-        output_dir = config.MUSIC_DIR
-    os.makedirs(output_dir, exist_ok=True)
+    tracks_by_mood = {m: [] for m in VALID_MOODS}
+    tracks_by_mood["general"] = []
 
-    # --- Check if we already have music downloaded ---
-    existing = find_existing_music(output_dir)
-    if existing:
-        print(f"[MUSIC] Using existing track: {os.path.basename(existing)}")
-        return existing
+    if not os.path.exists(music_dir):
+        return tracks_by_mood
 
-    # --- Check for Freesound API key ---
+    audio_extensions = (".mp3", ".wav", ".m4a", ".ogg", ".flac")
+
+    # --- Scan mood subfolders ---
+    for mood in VALID_MOODS:
+        mood_dir = os.path.join(music_dir, mood)
+        if os.path.isdir(mood_dir):
+            for f in os.listdir(mood_dir):
+                if f.lower().endswith(audio_extensions):
+                    path = os.path.join(mood_dir, f)
+                    if os.path.getsize(path) > 50000:
+                        tracks_by_mood[mood].append(path)
+
+    # --- Scan general subfolder ---
+    general_dir = os.path.join(music_dir, "general")
+    if os.path.isdir(general_dir):
+        for f in os.listdir(general_dir):
+            if f.lower().endswith(audio_extensions):
+                path = os.path.join(general_dir, f)
+                if os.path.getsize(path) > 50000:
+                    tracks_by_mood["general"].append(path)
+
+    # --- Scan root music dir for tagged and untagged files ---
+    for f in os.listdir(music_dir):
+        full_path = os.path.join(music_dir, f)
+        if not os.path.isfile(full_path):
+            continue
+        if not f.lower().endswith(audio_extensions):
+            continue
+        if os.path.getsize(full_path) < 50000:
+            continue
+
+        # --- Check for mood tag in filename (double underscore separator) ---
+        name_lower = f.lower()
+        tagged = False
+        for mood in VALID_MOODS:
+            if f"__{mood}" in name_lower:
+                tracks_by_mood[mood].append(full_path)
+                tagged = True
+                break
+
+        if not tagged:
+            tracks_by_mood["general"].append(full_path)
+
+    return tracks_by_mood
+
+
+def select_music(script_segments, music_dir=None):
+    """
+    # Selects the best background music for a video based on script mood
+    #
+    # Priority:
+    #   1. Local track matching the dominant mood
+    #   2. Local track from "general" pool
+    #   3. Freesound API download (mood-specific search)
+    #
+    # Returns: file path to the selected track, or None
+    """
+    if music_dir is None:
+        music_dir = config.MUSIC_DIR
+
+    # --- Determine the video's dominant mood ---
+    dominant_mood = get_dominant_mood(script_segments)
+    print(f"[MUSIC] Dominant mood: {dominant_mood}")
+
+    # --- Scan local library ---
+    tracks = scan_local_tracks(music_dir)
+
+    total_local = sum(len(v) for v in tracks.values())
+    print(f"[MUSIC] Local library: {total_local} tracks "
+          f"(dark={len(tracks['dark'])}, intense={len(tracks['intense'])}, "
+          f"reflective={len(tracks['reflective'])}, powerful={len(tracks['powerful'])}, "
+          f"general={len(tracks['general'])})")
+
+    # --- Priority 1: mood-matched track ---
+    if tracks[dominant_mood]:
+        selected = random.choice(tracks[dominant_mood])
+        print(f"[MUSIC] Selected ({dominant_mood}): {os.path.basename(selected)}")
+        return selected
+
+    # --- Priority 2: general pool ---
+    if tracks["general"]:
+        selected = random.choice(tracks["general"])
+        print(f"[MUSIC] No {dominant_mood} tracks, using general: {os.path.basename(selected)}")
+        return selected
+
+    # --- Priority 3: any local track from any mood ---
+    all_tracks = [t for pool in tracks.values() for t in pool]
+    if all_tracks:
+        selected = random.choice(all_tracks)
+        print(f"[MUSIC] Using available track: {os.path.basename(selected)}")
+        return selected
+
+    # --- Priority 4: Freesound fallback ---
+    print(f"[MUSIC] No local tracks found, trying Freesound...")
+    return _freesound_fallback(dominant_mood, music_dir)
+
+
+def _freesound_fallback(mood, output_dir):
+    """
+    # Downloads a track from Freesound API matched to the mood
+    # Only used when no local tracks are available
+    """
     if not config.FREESOUND_API_KEY or config.FREESOUND_API_KEY == "your_freesound_api_key_here":
-        print("[MUSIC] WARNING: No Freesound API key set. Skipping music download.")
-        print("[MUSIC] Add FREESOUND_API_KEY to your .env file for auto music")
+        print("[MUSIC] No Freesound API key set. Video will have voiceover only.")
         return None
 
-    print("[MUSIC] Searching Freesound for dramatic background music...")
+    queries = FREESOUND_MOOD_QUERIES.get(mood, FREESOUND_MOOD_QUERIES["intense"])
 
-    # --- Try each search query until we find a good track ---
-    for query in MUSIC_SEARCH_QUERIES:
-        result = search_and_download(query, output_dir)
+    for query in queries:
+        result = _freesound_search_download(query, output_dir)
         if result:
             return result
 
-    print("[MUSIC] Could not find suitable music from Freesound")
+    print("[MUSIC] Freesound fallback failed — no suitable tracks found")
     return None
 
 
-def search_and_download(query, output_dir):
+def _freesound_search_download(query, output_dir):
     """
-    # Searches Freesound API and downloads a matching track
-    #
-    # Freesound API search endpoint:
-    #   https://freesound.org/apiv2/search/text/
-    #
-    # We use the preview-hq-mp3 field to download the track
-    # (previews don't require OAuth, just the API token)
-    #
-    # Returns: file path of downloaded track, or None
+    # Searches Freesound and downloads the best-rated match
     """
-
-    # --- Search for tracks ---
     url = "https://freesound.org/apiv2/search/text/"
     params = {
         "query": query,
         "token": config.FREESOUND_API_KEY,
-        # Only return tracks longer than 60 seconds (good for background music)
         "filter": "duration:[60 TO 300]",
-        # Request the preview URLs and metadata we need
         "fields": "id,name,duration,previews,tags,avg_rating,num_downloads",
         "page_size": 15,
         "sort": "rating_desc",
@@ -93,48 +228,29 @@ def search_and_download(query, output_dir):
 
     try:
         response = requests.get(url, params=params, timeout=15)
-
         if response.status_code != 200:
-            print(f"[MUSIC] Freesound API error: {response.status_code}")
-            if response.status_code == 401:
-                print("[MUSIC] Invalid API key - check your FREESOUND_API_KEY in .env")
             return None
 
         data = response.json()
         results = data.get("results", [])
-
         if not results:
-            print(f"[MUSIC] No results for: {query}")
             return None
 
-        # --- Pick a good track from the top results ---
-        # Prefer tracks with higher ratings and more downloads
         track = random.choice(results[:5])
-
         track_name = track.get("name", "unknown")
-        duration = track.get("duration", 0)
         previews = track.get("previews", {})
-
-        # --- Get the high quality preview URL ---
-        # "preview-hq-mp3" is the best quality preview (~128kbps mp3)
-        # This doesn't require OAuth authentication
         download_url = previews.get("preview-hq-mp3") or previews.get("preview-lq-mp3")
 
         if not download_url:
-            print(f"[MUSIC] No preview URL for: {track_name}")
             return None
 
-        print(f"[MUSIC] Found: \"{track_name}\" ({duration:.0f}s)")
-        print(f"[MUSIC] Downloading...")
+        print(f"[MUSIC] Freesound: \"{track_name}\" ({track.get('duration', 0):.0f}s)")
 
-        # --- Download the track ---
         audio_response = requests.get(download_url, timeout=30)
         if audio_response.status_code != 200:
-            print(f"[MUSIC] Download failed: {audio_response.status_code}")
             return None
 
-        # --- Save to music folder ---
-        # Clean up the filename
+        os.makedirs(output_dir, exist_ok=True)
         safe_name = "".join(c if c.isalnum() or c in " -_" else "" for c in track_name)
         safe_name = safe_name.strip()[:50] or "background_music"
         file_path = os.path.join(output_dir, f"{safe_name}.mp3")
@@ -142,44 +258,32 @@ def search_and_download(query, output_dir):
         with open(file_path, "wb") as f:
             f.write(audio_response.content)
 
-        # --- Verify the file is a real audio file ---
-        file_size = os.path.getsize(file_path)
-        if file_size < 50000:  # less than 50KB is probably an error
-            print(f"[MUSIC] File too small ({file_size} bytes), removing")
+        if os.path.getsize(file_path) < 50000:
             os.remove(file_path)
             return None
 
-        print(f"[MUSIC] Saved: {os.path.basename(file_path)} ({file_size/1024:.0f} KB)")
+        print(f"[MUSIC] Downloaded: {os.path.basename(file_path)}")
         return file_path
 
     except Exception as e:
-        print(f"[MUSIC] Error: {e}")
+        print(f"[MUSIC] Freesound error: {e}")
         return None
-
-
-def find_existing_music(music_dir):
-    """
-    # Checks if there's already a music file in the folder
-    # Returns the path to the first .mp3/.wav found, or None
-    """
-    if not os.path.exists(music_dir):
-        return None
-
-    for f in os.listdir(music_dir):
-        if f.endswith((".mp3", ".wav", ".m4a")):
-            path = os.path.join(music_dir, f)
-            # Make sure it's a real file, not empty
-            if os.path.getsize(path) > 50000:
-                return path
-
-    return None
 
 
 # --- Quick test ---
 if __name__ == "__main__":
-    print("Testing Freesound music download...")
-    result = download_background_music()
+    # Test with sample segments
+    test_segments = [
+        {"text": "Silence is power.", "mood": "dark"},
+        {"text": "The wolf walks alone.", "mood": "intense"},
+        {"text": "Your strength is in stillness.", "mood": "reflective"},
+        {"text": "Rise above them all.", "mood": "powerful"},
+        {"text": "They will never understand.", "mood": "dark"},
+    ]
+
+    print("=== Music Selector Test ===")
+    result = select_music(test_segments)
     if result:
-        print(f"\nSuccess: {result}")
+        print(f"\nSelected: {result}")
     else:
-        print("\nFailed - check your FREESOUND_API_KEY in .env")
+        print("\nNo music found")
