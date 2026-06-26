@@ -145,40 +145,14 @@ PEXELS_SIZE = "large"            # high quality footage
 PEXELS_PER_PAGE = 10             # results per search query
 
 # --- Trending Topics for Script Generation ---
-TRENDING_TOPICS = [
-    "The psychology of silence and power",
-    "Why high-value people walk alone",
-    "Dark psychology of manipulation tactics",
-    "The quiet leader vs the loud victim",
-    "Why loneliness is a superpower",
-    "The psychology behind fake friends",
-    "Signs of a mentally strong person",
-    "Why successful people are quiet",
-    "The art of not reacting",
-    "Psychology of self-discipline",
-    "Why people disrespect you (and how to stop it)",
-    "The dark truth about comfort zones",
-    "How emotional control changes everything",
-    "The psychology of revenge vs moving on",
-    "Why nice people finish last (the truth)",
-    "Signs you are becoming dangerous (in a good way)",
-    "The wolf mentality - psychology of lone wolves",
-    "Why you should never explain yourself",
-    "The 48 laws of power - key lessons",
-    "Dark truths about human nature",
-    "Why being feared is better than being loved",
-    "The stoic mindset that changes your life",
-    "Psychology of body language and dominance",
-    "Why your silence terrifies them",
-    "The power of walking away",
-    "How narcissists manipulate you",
-    "The mindset of a high-value man",
-    "Why you attract toxic people",
-    "The psychology of winning alone",
-    "Why most people will never succeed",
-    "The hidden envy around you",
-    "Comfort is killing your potential",
-]
+# Built from all content type seed topics for backward compatibility
+# New code should use content_types.get_all_topics(type_key) directly
+from content_types import CONTENT_TYPES
+
+# Aggregate all topics from all content types (80 total: 20 per type × 4 types)
+TRENDING_TOPICS = []
+for _ct in CONTENT_TYPES.values():
+    TRENDING_TOPICS.extend(_ct["topics"])
 
 # --- HF Spaces path overrides ---
 if os.getenv("SPACE_ID"):
