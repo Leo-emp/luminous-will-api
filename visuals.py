@@ -5,6 +5,8 @@ import random
 import re
 import config
 from script_generator import enrich_visual_keywords
+# Import content type config so we can use type-specific search preferences
+from content_types import get_content_type
 
 # ============================================================
 # VISUAL SOURCER
@@ -68,6 +70,58 @@ BRAND_BONUS_WORDS = {
 }
 
 
+def _get_brand_words(content_type_key=None):
+    """
+    # Returns brand-relevant words for relevance scoring
+    # Uses content type's visual_subjects to build a type-specific set
+    # Falls back to the default BRAND_BONUS_WORDS if no type specified
+    #
+    # Args:
+    #   content_type_key: optional string key like "stoic_philosophy" or "sigma_grindset"
+    #
+    # Returns: set of lowercase bonus words to reward in scoring
+    """
+    if content_type_key is None:
+        # No type specified — use the universal default brand words
+        return BRAND_BONUS_WORDS
+
+    # --- Look up the content type config ---
+    ct = get_content_type(content_type_key)
+
+    # --- Extract individual words from each visual_subjects phrase ---
+    # e.g. "lone wolf dark forest" → {"lone", "wolf", "dark", "forest"}
+    type_words = set()
+    for subject in ct.get("visual_subjects", []):
+        type_words.update(subject.lower().split())
+
+    # --- Merge type-specific words with the universal base set ---
+    # Using set union (|) so no duplicates
+    return BRAND_BONUS_WORDS | type_words
+
+
+def _get_avoid_keywords(content_type_key=None):
+    """
+    # Returns avoid keywords for this content type
+    # Merges the base AVOID_KEYWORDS with type-specific avoid list
+    #
+    # Args:
+    #   content_type_key: optional string key like "stoic_philosophy"
+    #
+    # Returns: list of lowercase strings to penalise in video metadata
+    """
+    if content_type_key is None:
+        # No type specified — use the universal default avoid list
+        return AVOID_KEYWORDS
+
+    # --- Look up the content type config ---
+    ct = get_content_type(content_type_key)
+    type_avoid = ct.get("visual_avoid", [])
+
+    # --- Append type-specific avoids that aren't already in the base list ---
+    # Lower-cases type avoids and deduplicates against base list
+    return AVOID_KEYWORDS + [a.lower() for a in type_avoid if a.lower() not in AVOID_KEYWORDS]
+
+
 def _extract_content_words(text):
     """
     # Extracts meaningful words from text for relevance scoring
@@ -78,7 +132,7 @@ def _extract_content_words(text):
     return {w for w in words if w not in STOP_WORDS and len(w) > 2}
 
 
-def _score_video_relevance(video_meta, script_text, keywords, source="pexels"):
+def _score_video_relevance(video_meta, script_text, keywords, source="pexels", content_type_key=None):
     """
     # Scores how well a stock video matches the script segment
     # Higher score = better match
@@ -128,11 +182,13 @@ def _score_video_relevance(video_meta, script_text, keywords, source="pexels"):
         score += (len(script_matches) / len(script_words)) * 3.0
 
     # --- Score 3: Brand bonus (up to 2 points) ---
-    brand_matches = BRAND_BONUS_WORDS & video_words
+    # Use type-specific brand words if a content_type_key was supplied
+    brand_matches = _get_brand_words(content_type_key) & video_words
     score += min(len(brand_matches) * 0.4, 2.0)
 
     # --- Penalty: avoid keywords reduce score ---
-    for bad in AVOID_KEYWORDS:
+    # Use type-specific avoid list if a content_type_key was supplied
+    for bad in _get_avoid_keywords(content_type_key):
         if bad in video_text:
             score -= 1.0
 
@@ -275,7 +331,7 @@ def _download_pixabay_video(video_meta, output_dir, index):
         return None
 
 
-def search_and_download_videos(script_segments, output_dir, profile=None):
+def search_and_download_videos(script_segments, output_dir, profile=None, content_type_key=None):
     """
     # For each script segment, searches Pexels + Pixabay with SEMANTIC MATCHING
     # Uses multi-query search (primary + alt keywords) and relevance scoring
@@ -291,6 +347,7 @@ def search_and_download_videos(script_segments, output_dir, profile=None):
     #   script_segments: list of script dicts with 'visual_keywords' and optional 'visual_keywords_alt'
     #   output_dir: directory to save downloaded clips
     #   profile: optional format profile dict (contains pexels_orientation, etc.)
+    #   content_type_key: optional content type key (e.g. "stoic_philosophy") for type-specific scoring
     #
     # Returns:
     #   list of file paths to downloaded video clips
@@ -362,14 +419,16 @@ def search_and_download_videos(script_segments, output_dir, profile=None):
             if has_pexels:
                 pexels_results = _search_pexels_candidates(query, used_pexels_ids, orientation)
                 for video_meta in pexels_results[:5]:
-                    score = _score_video_relevance(video_meta, script_text, keywords, source="pexels")
+                    # Pass content_type_key so scoring uses type-specific brand words + avoids
+                    score = _score_video_relevance(video_meta, script_text, keywords, source="pexels", content_type_key=content_type_key)
                     all_candidates.append((score, video_meta, "pexels"))
 
             # --- Search Pixabay ---
             if has_pixabay:
                 pixabay_results = _search_pixabay_candidates(query, used_pixabay_ids)
                 for video_meta in pixabay_results[:5]:
-                    score = _score_video_relevance(video_meta, script_text, keywords, source="pixabay")
+                    # Pass content_type_key so scoring uses type-specific brand words + avoids
+                    score = _score_video_relevance(video_meta, script_text, keywords, source="pixabay", content_type_key=content_type_key)
                     all_candidates.append((score, video_meta, "pixabay"))
 
             # --- Rate limit between queries ---
