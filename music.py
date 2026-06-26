@@ -3,6 +3,9 @@ import random
 import requests
 import config
 
+# Import content type helper so we can look up a type's preferred music mood
+from content_types import get_content_type
+
 # ============================================================
 # MUSIC SELECTOR
 # Picks the best background music for each video based on mood
@@ -141,23 +144,44 @@ def scan_local_tracks(music_dir=None):
     return tracks_by_mood
 
 
-def select_music(script_segments, music_dir=None):
+def select_music(script_segments, music_dir=None, content_type_key=None):
     """
-    # Selects the best background music for a video based on script mood
+    # Selects the best background music for a video based on mood
     #
-    # Priority:
+    # If content_type_key is provided, uses its music_mood directly
+    # (e.g. "dark_motivation" → "intense", "stoic_philosophy" → "reflective")
+    # Otherwise falls back to counting segment moods (original behaviour).
+    #
+    # Priority once mood is known:
     #   1. Local track matching the dominant mood
     #   2. Local track from "general" pool
-    #   3. Freesound API download (mood-specific search)
+    #   3. Any available local track (any mood)
+    #   4. Freesound API download (mood-specific search)
+    #
+    # Args:
+    #   script_segments: list of segment dicts (used for fallback mood counting)
+    #   music_dir:       override for music assets directory (default: config.MUSIC_DIR)
+    #   content_type_key: e.g. "dark_motivation" — if given, mood is taken from
+    #                    content type definition rather than counting segment moods
     #
     # Returns: file path to the selected track, or None
     """
     if music_dir is None:
         music_dir = config.MUSIC_DIR
 
-    # --- Determine the video's dominant mood ---
-    dominant_mood = get_dominant_mood(script_segments)
-    print(f"[MUSIC] Dominant mood: {dominant_mood}")
+    # --- Determine the video's mood ---
+    if content_type_key:
+        # Use the content type's preferred music mood directly.
+        # This ensures each content type always gets its intended sonic feel
+        # regardless of how the individual segment moods happen to fall.
+        ct = get_content_type(content_type_key)
+        dominant_mood = ct.get("music_mood", "intense")
+        print(f"[MUSIC] Content type mood ({content_type_key}): {dominant_mood}")
+    else:
+        # Fallback: count mood tags across all script segments and pick the
+        # most common one (original behaviour — keeps backwards compatibility)
+        dominant_mood = get_dominant_mood(script_segments)
+        print(f"[MUSIC] Dominant mood (from segments): {dominant_mood}")
 
     # --- Scan local library ---
     tracks = scan_local_tracks(music_dir)
