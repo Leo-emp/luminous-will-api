@@ -3,6 +3,10 @@ import json
 import config
 import google.generativeai as genai
 
+# Import content type definitions — single source of truth for all 4 content types
+# get_content_type(key) returns the full config dict for that type
+from content_types import get_content_type, CONTENT_TYPES
+
 # ============================================================
 # SCRIPT GENERATOR
 # Generates motivational/psychological scripts with punchy hooks
@@ -35,11 +39,14 @@ HOOK_TEMPLATES = [
 ]
 
 
-def generate_script(topic=None, custom_hook=None, video_format=None):
+def generate_script(topic=None, custom_hook=None, video_format=None, content_type_key=None):
     """
-    # Generates a video script based on the format:
+    # Generates a video script based on the format and content type:
     #   - VERTICAL_SHORT: template-based (existing behavior)
     #   - HORIZONTAL_LONG: Gemini AI-generated (8-12 min)
+    #
+    # content_type_key: "dark_motivation", "stoic_philosophy", etc.
+    #   If None, defaults to "dark_motivation" for backward compatibility
     #
     # Returns (segments_list, topic_string)
     """
@@ -47,30 +54,49 @@ def generate_script(topic=None, custom_hook=None, video_format=None):
     # Import here to avoid circular import
     from config import VideoFormat
 
+    # Default to dark_motivation if no content type specified
+    # This preserves backward compatibility with any existing callers
+    if content_type_key is None:
+        content_type_key = "dark_motivation"
+
     if video_format == VideoFormat.HORIZONTAL_LONG:
-        return generate_long_script(topic)
+        # Pass the content type key down to the long-form generator
+        return generate_long_script(topic, content_type_key=content_type_key)
 
     # --- Default: short-form template script ---
+    # For short-form, pick a topic from the content type's topic pool if none given
     if topic is None:
-        topic = random.choice(config.TRENDING_TOPICS)
+        ct = get_content_type(content_type_key)
+        topic = random.choice(ct["topics"])
 
-    print(f"[SCRIPT] Generating script for: {topic}")
+    print(f"[SCRIPT] Generating script for: {topic} (type: {content_type_key})")
     script = get_template_script(topic)
     return script, topic
 
 
-def generate_long_script(topic=None):
+def generate_long_script(topic=None, content_type_key=None):
     """
     # Generates an 8-12 minute script using Gemini AI
+    # Uses the content type's persona for the Gemini prompt so each
+    # content type (dark motivation, stoic philosophy, etc.) has its own voice
+    #
     # Returns 40-60 segments with narrative arc structure:
     #   hook -> setup -> escalation -> climax -> resolution -> callback
     # Each segment includes visual keywords and chapter markers
     """
 
-    if topic is None:
-        topic = random.choice(config.TRENDING_TOPICS)
+    # Default to dark_motivation for backward compatibility
+    if content_type_key is None:
+        content_type_key = "dark_motivation"
 
-    print(f"[SCRIPT] Generating long-form script for: {topic}")
+    # Load the full content type config — persona, visual style, subjects, etc.
+    ct = get_content_type(content_type_key)
+
+    if topic is None:
+        # Pick a random topic from this content type's topic pool
+        topic = random.choice(ct["topics"])
+
+    print(f"[SCRIPT] Generating long-form script for: {topic} (type: {content_type_key})")
 
     if not config.GEMINI_API_KEY:
         print("[SCRIPT] WARNING: No Gemini API key, falling back to chained templates")
@@ -79,13 +105,18 @@ def generate_long_script(topic=None):
     genai.configure(api_key=config.GEMINI_API_KEY)
     model = genai.GenerativeModel("gemini-2.5-flash")
 
-    prompt = f"""You are a scriptwriter for the YouTube channel "Luminous Will" — dark motivation, stoic philosophy, psychology of power.
+    # Build a comma-separated string of preferred visual subjects for this content type
+    visual_subjects = ", ".join(ct.get("visual_subjects", ["dark cinematic landscape"]))
+
+    # Build a comma-separated string of subjects to NEVER use (wrong aesthetic)
+    visual_avoid = ", ".join(ct.get("visual_avoid", []))
+
+    # The prompt now pulls the persona and visual preferences from the content type config
+    # rather than being hardcoded — this is what makes it content-type-aware
+    prompt = f"""You are a scriptwriter for the YouTube channel "Luminous Will" — {ct["name"]}.
 
 VOICE RULES:
-- Stoic, commanding, no-nonsense. Short punchy sentences even in long form.
-- No fluff, no clichés ("grind", "hustle", "manifest"), no questions to the audience.
-- Speak in universal truths. Never say "I" or "we". Use "you" and "they".
-- Dark, intense energy. The tone of someone who has seen the worst and emerged stronger.
+{ct["gemini_persona"]}
 
 STRUCTURE for an 8-12 minute script on "{topic}":
 1. HOOK (first 30 seconds) — One shocking statement that stops the scroll
@@ -103,11 +134,11 @@ OUTPUT FORMAT — respond with ONLY a JSON array, no markdown, no explanation:
 [
   {{
     "text": "The sentence spoken in the voiceover.",
-    "visual_keywords": "5-6 keywords for stock footage search (landscape orientation, dark cinematic)",
+    "visual_keywords": "5-6 keywords for stock footage search",
     "visual_keywords_alt": [
-      "alternative search query 1 — different angle on same visual concept",
-      "alternative search query 2 — broader or abstract version",
-      "alternative search query 3 — concrete subject that matches the mood"
+      "alternative search query 1",
+      "alternative search query 2",
+      "alternative search query 3"
     ],
     "mood": "dark|intense|reflective|powerful",
     "emphasis_words": ["one", "key", "word"],
@@ -117,17 +148,14 @@ OUTPUT FORMAT — respond with ONLY a JSON array, no markdown, no explanation:
 ]
 
 VISUAL KEYWORD RULES:
-- Always include "dark" or "cinematic" in keywords
-- Use landscape-oriented subjects: cityscapes, mountains, oceans, highways, architecture, storms
+- Always include "{ct["visual_style"]}" style in keywords
+- Preferred subjects: {visual_subjects}
+- NEVER use subjects from this avoid list: {visual_avoid}
 - Vary the subjects — no two consecutive segments should have the same visual theme
-- Preferred subjects: dark cityscape night, storm clouds dramatic, mountain peak dark, ocean waves cinematic, businessman walking dark, wolf forest night, lion savanna dark, chess board dark, gym training dark, running athlete silhouette
 
 VISUAL KEYWORDS ALT RULES:
 - Each alt query should be a DIFFERENT way to find footage that matches this segment's meaning
-- Alt 1: rephrase the main query with different synonyms (e.g. "dark city skyline night" vs "urban nightscape cinematic")
-- Alt 2: zoom out to a broader concept (e.g. "dark atmospheric landscape" for a power segment)
-- Alt 3: use a concrete, searchable subject (e.g. "wolf standing alone dark forest" for a solitude segment)
-- All alts must still match the dark/cinematic brand — no bright, happy, colorful subjects
+- All alts must match the {ct["name"]} aesthetic — no bright, happy, colorful subjects
 
 Generate the script now. 50 segments, JSON array only."""
 
