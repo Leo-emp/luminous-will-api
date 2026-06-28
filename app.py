@@ -87,9 +87,16 @@ def generate_video(topic, video_format_str="short", content_type_key=None, progr
 
     # --- Generate script using content-type-aware prompts ---
     progress(0.05, desc=f"Generating {ct['name']} script...")
+
+    # FIX 2: Use pick_unused_topic so every auto-generated video gets a fresh topic.
+    # Previously, when topic was None, generate_script did random.choice(ct["topics"])
+    # internally — meaning it could repeat any topic at random.
+    # Now we call pick_unused_topic BEFORE generate_script so the scheduler tracks
+    # exactly which topics have been used and never repeats one until all are exhausted.
     if not topic or topic.strip() == "":
-        # No topic selected — will be chosen randomly within the type's topic pool
-        topic = None
+        # No topic specified — ask the scheduler for a never-used topic
+        topic = pick_unused_topic(content_type_key)
+
     script_segments, topic = generate_script(topic, video_format=fmt, content_type_key=content_type_key)
     full_script = get_script_text(script_segments)
 
@@ -184,7 +191,7 @@ with gr.Blocks(
 ) as demo:
 
     gr.HTML('<h1 class="main-title">LUMINOUS WILL</h1>')
-    gr.HTML('<p class="subtitle">Dark Motivation Video Generator</p>')
+    gr.HTML('<p class="subtitle">Automated Video Generator</p>')
 
     with gr.Row():
         with gr.Column(scale=1):

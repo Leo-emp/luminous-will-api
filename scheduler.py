@@ -4,7 +4,8 @@ import random
 from datetime import datetime
 import google.generativeai as genai
 import config
-from content_types import get_content_type, get_all_topics, CONTENT_TYPES
+# Only get_content_type and get_all_topics are used here; CONTENT_TYPES was removed (dead import)
+from content_types import get_content_type, get_all_topics
 
 # ============================================================
 # SCHEDULER
