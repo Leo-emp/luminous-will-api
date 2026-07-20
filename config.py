@@ -128,6 +128,7 @@ ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 LOGO_PATH = os.path.join(ASSETS_DIR, "logo.png")
 MUSIC_DIR = os.path.join(ASSETS_DIR, "music")
 FONTS_DIR = os.path.join(ASSETS_DIR, "fonts")
+CAPTION_FONT_FILE = os.path.join(FONTS_DIR, "Montserrat-Bold.ttf")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 TEMP_DIR = os.path.join(BASE_DIR, "temp")
 

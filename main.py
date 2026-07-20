@@ -10,6 +10,8 @@ from captions import create_caption_clips
 from video_assembler import assemble_video
 from brand_reference import validate_references, VIDEO_SPECS
 from music import select_music
+from thumbnail import generate_thumbnail, generate_reel_thumbnail
+from metadata_generator import generate_metadata
 
 # ============================================================
 # LUMINOUS WILL - AUTOMATED VIDEO PIPELINE
@@ -82,14 +84,14 @@ def run_pipeline(topic=None, video_format=None):
     print("=" * 60)
 
     # --- STEP 1: VALIDATE ---
-    print("\n[STEP 1/6] Validating setup...")
+    print("\n[STEP 1/8] Validating setup...")
     if not validate_setup():
         return None
 
     validate_references()
 
     # --- STEP 2: GENERATE SCRIPT ---
-    print("\n[STEP 2/6] Generating script...")
+    print("\n[STEP 2/8] Generating script...")
     script_segments, topic = generate_script(topic, video_format=video_format)
     full_script = get_script_text(script_segments)
     print(f"[SCRIPT] Topic: {topic}")
@@ -103,14 +105,14 @@ def run_pipeline(topic=None, video_format=None):
     os.makedirs(video_temp, exist_ok=True)
 
     # --- STEP 3: GENERATE VOICEOVER ---
-    print("\n[STEP 3/6] Generating voiceover...")
+    print("\n[STEP 3/8] Generating voiceover...")
     voiceover_path = os.path.join(video_temp, "voiceover.mp3")
     word_timestamps = generate_voiceover(full_script, voiceover_path, profile=profile)
     audio_duration = get_audio_duration(voiceover_path)
     print(f"[VOICEOVER] Duration: {audio_duration:.1f}s")
 
     # --- STEP 4: DOWNLOAD STOCK FOOTAGE ---
-    print("\n[STEP 4/6] Downloading stock footage...")
+    print("\n[STEP 4/8] Downloading stock footage...")
     clips_dir = os.path.join(video_temp, "clips")
     clip_paths = search_and_download_videos(script_segments, clips_dir, profile=profile)
 
@@ -119,13 +121,13 @@ def run_pipeline(topic=None, video_format=None):
         return None
 
     # --- STEP 5: BUILD CAPTIONS ---
-    print("\n[STEP 5/6] Building word-synced captions...")
+    print("\n[STEP 5/8] Building word-synced captions...")
     caption_events = create_caption_clips(
         word_timestamps, script_segments, audio_duration
     )
 
     # --- STEP 6: ASSEMBLE FINAL VIDEO ---
-    print("\n[STEP 6/6] Assembling final video...")
+    print("\n[STEP 6/8] Assembling final video...")
     output_path = os.path.join(config.OUTPUT_DIR, f"{video_name}.mp4")
     # --- Mood-based music selection (matches track to script's dominant mood) ---
     music_path = select_music(script_segments)
@@ -143,6 +145,29 @@ def run_pipeline(topic=None, video_format=None):
         video_format=video_format,
     )
 
+    # --- STEP 7: GENERATE THUMBNAIL ---
+    print("\n[STEP 7/8] Generating thumbnail...")
+    thumbnail_path = None
+    try:
+        # # Use portrait reel thumbnail for vertical, standard for horizontal
+        if video_format == VideoFormat.VERTICAL_SHORT:
+            thumbnail_path = generate_reel_thumbnail(output_path, topic)
+        else:
+            thumbnail_path = generate_thumbnail(output_path, topic)
+        print(f"[THUMBNAIL] Saved: {thumbnail_path}")
+    except Exception as e:
+        # # Thumbnail failure is non-fatal — video is still usable
+        print(f"[THUMBNAIL] Skipped due to error: {e}")
+
+    # --- STEP 8: GENERATE METADATA ---
+    print("\n[STEP 8/8] Generating platform metadata...")
+    metadata = None
+    try:
+        metadata = generate_metadata(topic, script_segments, video_format.value)
+        print(f"[METADATA] Generated for: {', '.join(metadata.keys())}")
+    except Exception as e:
+        print(f"[METADATA] Skipped due to error: {e}")
+
     # --- DONE ---
     elapsed = time.time() - start_time
     print("\n" + "=" * 60)
@@ -150,10 +175,19 @@ def run_pipeline(topic=None, video_format=None):
     print(f"  Format: {video_format.value}")
     print(f"  Topic: {topic}")
     print(f"  Output: {output_path}")
+    if thumbnail_path:
+        print(f"  Thumbnail: {thumbnail_path}")
+    if metadata and "youtube" in metadata:
+        print(f"  YT Title: {metadata['youtube']['title']}")
     print(f"  Time: {elapsed:.0f} seconds")
     print("=" * 60 + "\n")
 
-    return output_path
+    return {
+        "video_path": output_path,
+        "thumbnail_path": thumbnail_path,
+        "metadata": metadata,
+        "topic": topic,
+    }
 
 
 def list_topics():

@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import time
 import gradio as gr
@@ -10,6 +11,8 @@ from captions import create_caption_clips
 from video_assembler import assemble_video
 from brand_reference import validate_references, VIDEO_SPECS
 from music import select_music
+from thumbnail import generate_thumbnail, generate_reel_thumbnail
+from metadata_generator import generate_metadata
 
 # --- Content type system: multi-type video generation support ---
 from content_types import CONTENT_TYPES, get_content_type
@@ -143,6 +146,32 @@ def generate_video(topic, video_format_str="short", content_type_key=None, progr
         video_format=fmt,
     )
 
+    # --- Generate thumbnail from the best video frame ---
+    progress(0.80, desc="Generating thumbnail...")
+    thumbnail_path = None
+    try:
+        if fmt == VideoFormat.VERTICAL_SHORT:
+            thumbnail_path = generate_reel_thumbnail(output_path, topic)
+        else:
+            thumbnail_path = generate_thumbnail(output_path, topic)
+    except Exception as e:
+        print(f"[THUMBNAIL] Skipped: {e}")
+
+    # --- Generate viral platform metadata (titles, captions, hashtags) ---
+    progress(0.88, desc="Generating platform metadata...")
+    metadata = None
+    try:
+        metadata = generate_metadata(topic, script_segments, fmt.value)
+        # # Save metadata as a JSON sidecar file alongside the video
+        # # e.g. output/Power_of_Silence_20260720.mp4 → ...metadata.json
+        if metadata:
+            meta_path = output_path.replace(".mp4", "_metadata.json")
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, indent=2, ensure_ascii=False)
+            print(f"[METADATA] Saved sidecar: {meta_path}")
+    except Exception as e:
+        print(f"[METADATA] Skipped: {e}")
+
     # --- Remove temp working directory to free disk space ---
     progress(0.95, desc="Cleaning up...")
     shutil.rmtree(video_temp, ignore_errors=True)
@@ -150,8 +179,17 @@ def generate_video(topic, video_format_str="short", content_type_key=None, progr
     elapsed = time.time() - start_time
     progress(1.0, desc=f"Done! ({elapsed:.0f}s)")
 
-    # --- Return video file path + summary markdown for Gradio UI ---
-    return output_path, f"**{ct['name']}: {topic}** ({fmt.value})\n\nGenerated in {elapsed:.0f} seconds | {len(script_segments)} segments | {audio_duration:.0f}s voiceover"
+    # --- Build summary with metadata preview ---
+    summary = f"**{ct['name']}: {topic}** ({fmt.value})\n\nGenerated in {elapsed:.0f} seconds | {len(script_segments)} segments | {audio_duration:.0f}s voiceover"
+    if thumbnail_path:
+        summary += f"\n\n**Thumbnail:** Generated"
+    if metadata:
+        if "youtube" in metadata:
+            summary += f"\n\n**YouTube Title:** {metadata['youtube'].get('title', 'N/A')}"
+        if "tiktok" in metadata:
+            summary += f"\n\n**TikTok Caption:** {metadata['tiktok'].get('caption', 'N/A')[:100]}..."
+
+    return output_path, summary
 
 
 # ============================================================
