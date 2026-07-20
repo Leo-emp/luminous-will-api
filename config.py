@@ -39,7 +39,7 @@ FORMAT_PROFILES = {
         "caption_stroke_width": 2,
         "brightness_factor": 0.55,
         "saturation_factor": 0.45,
-        "music_volume": 0.32,
+        "music_volume": 0.15,  # matches brand_reference.py spec
         "music_mode": "flat",
         "transition_type": "cut",
         "transition_duration": 0.0,
@@ -118,9 +118,9 @@ CONTRAST_FACTOR = 1.20      # stronger contrast (measured from videos)
 
 # --- Audio Settings ---
 VOICEOVER_VOLUME = 1.0      # full volume for voiceover (always dominant, crystal clear)
-MUSIC_VOLUME = 0.32         # 32% volume - intense motivational feel, voice still dominant
-                            # voice is ~3x louder so it stays crystal clear
-                            # music hits hard for instant motivation energy
+MUSIC_VOLUME = 0.15         # 15% volume - matches brand_reference.py spec for subtle bed
+                            # voice stays crystal clear as the dominant element
+                            # music provides atmosphere without competing
 
 # --- Paths ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

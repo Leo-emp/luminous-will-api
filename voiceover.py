@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import requests
 import config
 
@@ -7,7 +8,30 @@ import config
 # VOICEOVER GENERATOR
 # Uses ElevenLabs API to generate speech with word timestamps
 # Voice: Adam (deep English story voice)
+#
+# RETRY LOGIC (added for operational resilience):
+# ElevenLabs calls are the single most expensive step in the pipeline.
+# A transient network blip or a 429 rate-limit response would kill the
+# entire video generation without retry logic. We retry up to 3 times
+# with exponential backoff (2s -> 4s -> 8s) on:
+#   - Network errors (ConnectionError, Timeout) — transient by nature
+#   - 429 Too Many Requests — rate limit, wait and retry
+#   - 500/502/503/504 — server-side hiccups that usually self-heal
+# We do NOT retry on 400/401/403 — those are client errors (bad key,
+# bad request) that won't fix themselves no matter how long we wait.
 # ============================================================
+
+# --- Retry configuration ---
+# MAX_RETRIES: how many times to retry after the first failure (3 retries = 4 total attempts)
+MAX_RETRIES = 3
+# RETRY_BASE_DELAY: starting delay in seconds, doubles each retry (2s, 4s, 8s)
+RETRY_BASE_DELAY = 2
+# REQUEST_TIMEOUT: seconds before we give up waiting for ElevenLabs to respond
+# 30s is generous — typical response is 5-15s, but large scripts can take longer
+REQUEST_TIMEOUT = 30
+# RETRYABLE_STATUS_CODES: HTTP status codes that are worth retrying
+# 429 = rate limited, 500/502/503/504 = server errors (transient)
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def generate_voiceover(script_text, output_path, profile=None):
@@ -47,10 +71,15 @@ def generate_voiceover(script_text, output_path, profile=None):
         "speed": config.VOICE_SPEED,
     }
 
-    # --- Make the API call ---
-    response = requests.post(url, json=payload, headers=headers)
+    # --- Make the API call with retry logic ---
+    # We wrap the request in a retry loop so transient failures don't kill the pipeline.
+    # Each retry waits exponentially longer: 2s, 4s, 8s (RETRY_BASE_DELAY * 2^attempt).
+    # This gives ElevenLabs time to recover from rate limits or server issues.
+    response = _call_elevenlabs_with_retry(url, headers, payload)
 
     if response.status_code != 200:
+        # If we get here after all retries, it's a non-retryable error (400/401/403)
+        # or we exhausted all retry attempts on a retryable error
         print(f"[VOICEOVER] ERROR: API returned {response.status_code}")
         print(f"[VOICEOVER] Response: {response.text}")
         raise Exception(f"ElevenLabs API error: {response.status_code}")
@@ -81,6 +110,115 @@ def generate_voiceover(script_text, output_path, profile=None):
     print(f"[VOICEOVER] Found {len(word_timestamps)} words with timestamps")
 
     return word_timestamps
+
+
+def _call_elevenlabs_with_retry(url, headers, payload):
+    """
+    # Makes the ElevenLabs API call with retry logic for resilience.
+    #
+    # WHY: ElevenLabs is an external API — network hiccups, rate limits (429),
+    # and server errors (500-504) are all common in production. Without retries,
+    # a single transient failure kills the entire video generation pipeline.
+    #
+    # HOW: Exponential backoff — each retry waits twice as long as the last:
+    #   Attempt 1: immediate
+    #   Attempt 2: wait 2 seconds
+    #   Attempt 3: wait 4 seconds
+    #   Attempt 4: wait 8 seconds
+    # This pattern is industry standard because:
+    #   - It gives the server time to recover
+    #   - It avoids hammering a rate-limited endpoint
+    #   - The exponential growth prevents long waits on quick recoveries
+    #
+    # WHAT WE DON'T RETRY:
+    #   - 400 Bad Request — our payload is wrong, retrying won't help
+    #   - 401 Unauthorized — bad API key, retrying won't help
+    #   - 403 Forbidden — access denied, retrying won't help
+    #
+    # Returns:
+    #   The requests.Response object (caller checks status_code)
+    #
+    # Raises:
+    #   Exception if all retries exhausted on network errors (no response at all)
+    """
+
+    last_exception = None  # Track the last error so we can re-raise it if all retries fail
+
+    # total_attempts = 1 (initial) + MAX_RETRIES (retries) = 4 attempts total
+    for attempt in range(1, MAX_RETRIES + 2):
+        try:
+            # --- Make the actual HTTP request ---
+            # timeout=REQUEST_TIMEOUT (30s) prevents hanging forever if ElevenLabs
+            # stops responding. Without this, requests.post() waits indefinitely.
+            response = requests.post(
+                url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT
+            )
+
+            # --- Check if we got a successful response ---
+            if response.status_code == 200:
+                # Success! Return immediately, no need to retry
+                if attempt > 1:
+                    # Log that we recovered after retrying (useful for debugging)
+                    print(f"[VOICEOVER] Succeeded on attempt {attempt} after {attempt - 1} retries")
+                return response
+
+            # --- Check if this error is worth retrying ---
+            if response.status_code in RETRYABLE_STATUS_CODES:
+                # This is a transient error (rate limit or server issue) — retry it
+                if attempt <= MAX_RETRIES:
+                    # Calculate exponential backoff delay: 2^(attempt-1) * base_delay
+                    # attempt 1 -> 2s, attempt 2 -> 4s, attempt 3 -> 8s
+                    delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                    print(
+                        f"[VOICEOVER] Attempt {attempt}/{MAX_RETRIES + 1} failed "
+                        f"(HTTP {response.status_code}). Retrying in {delay}s..."
+                    )
+                    time.sleep(delay)
+                    continue  # Go to next attempt
+                else:
+                    # Exhausted all retries — return the last failed response
+                    # so the caller can handle the error
+                    print(
+                        f"[VOICEOVER] All {MAX_RETRIES + 1} attempts failed. "
+                        f"Last status: {response.status_code}"
+                    )
+                    return response
+            else:
+                # Non-retryable error (400/401/403/etc.) — return immediately
+                # These are client errors that won't fix themselves on retry
+                print(
+                    f"[VOICEOVER] Non-retryable error (HTTP {response.status_code}). "
+                    f"Not retrying."
+                )
+                return response
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            # --- Network-level failure (no HTTP response at all) ---
+            # ConnectionError = can't reach the server (DNS fail, network down, etc.)
+            # Timeout = server didn't respond within REQUEST_TIMEOUT seconds
+            # Both are transient and worth retrying
+            last_exception = e
+
+            if attempt <= MAX_RETRIES:
+                delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                print(
+                    f"[VOICEOVER] Attempt {attempt}/{MAX_RETRIES + 1} failed "
+                    f"(network error: {type(e).__name__}). Retrying in {delay}s..."
+                )
+                time.sleep(delay)
+                continue
+            else:
+                # All retries exhausted and we never got an HTTP response
+                print(
+                    f"[VOICEOVER] All {MAX_RETRIES + 1} attempts failed with "
+                    f"network errors. Last error: {e}"
+                )
+                raise Exception(
+                    f"ElevenLabs API unreachable after {MAX_RETRIES + 1} attempts: {e}"
+                ) from last_exception
+
+    # Safety fallback — should never reach here, but just in case
+    raise Exception("ElevenLabs retry loop exited unexpectedly")
 
 
 def extract_word_timestamps(alignment):
