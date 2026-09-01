@@ -35,11 +35,11 @@ FORMAT_PROFILES = {
         "pexels_orientation": "portrait",
         "duration_range": (60, 90),
         "caption_font_size": 65,
-        "caption_position_y": 0.83,
+        "caption_position_y": 0.60,
         "caption_stroke_width": 2,
         "brightness_factor": 0.55,
         "saturation_factor": 0.45,
-        "music_volume": 0.15,  # matches brand_reference.py spec
+        "music_volume": 0.30,
         "music_mode": "flat",
         "transition_type": "cut",
         "transition_duration": 0.0,
@@ -87,7 +87,7 @@ VOICE_SETTINGS = {
     "style": 0.0,                # 0% style - no variation = commanding delivery
     "use_speaker_boost": True,   # speaker boost enabled - deeper resonance
 }
-VOICE_SPEED = 0.83  # matched to user's preferred pace
+VOICE_SPEED = 0.75  # slower, more deliberate pace for dark motivation
 
 # --- Video Settings ---
 VIDEO_WIDTH = 1080
@@ -103,7 +103,7 @@ CAPTION_FONT_SIZE = 65       # measured from real videos
 CAPTION_COLOR = "white"
 CAPTION_HIGHLIGHT_COLOR = "#E8A817"  # warm amber (matched from video frames)
 CAPTION_FONT = "Arial-Bold"
-CAPTION_POSITION = ("center", 0.83)  # 83% from top (measured: 83.2%)
+CAPTION_POSITION = ("center", 0.60)  # 60% from top — above platform UI overlay zone
 CAPTION_STROKE_COLOR = "black"
 CAPTION_STROKE_WIDTH = 2     # thinner stroke for cleaner look (matched from videos)
 
@@ -118,7 +118,7 @@ CONTRAST_FACTOR = 1.20      # stronger contrast (measured from videos)
 
 # --- Audio Settings ---
 VOICEOVER_VOLUME = 1.0      # full volume for voiceover (always dominant, crystal clear)
-MUSIC_VOLUME = 0.15         # 15% volume - matches brand_reference.py spec for subtle bed
+MUSIC_VOLUME = 0.30         # 30% volume - clearly audible motivational background
                             # voice stays crystal clear as the dominant element
                             # music provides atmosphere without competing
 
@@ -159,4 +159,3 @@ for _ct in CONTENT_TYPES.values():
 if os.getenv("SPACE_ID"):
     OUTPUT_DIR = os.path.join("/tmp", "luminous_output")
     TEMP_DIR = os.path.join("/tmp", "luminous_temp")
-    MUSIC_DIR = os.path.join("/tmp", "luminous_music")
