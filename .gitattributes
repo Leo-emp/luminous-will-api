@@ -1,0 +1,5 @@
+*.mp3 filter=xet diff=xet merge=xet -text
+*.ttf filter=xet diff=xet merge=xet -text
+*.png filter=xet diff=xet merge=xet -text
+*.wav filter=xet diff=xet merge=xet -text
+*.mp4 filter=xet diff=xet merge=xet -text
