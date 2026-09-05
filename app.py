@@ -310,4 +310,4 @@ with gr.Blocks(
 if __name__ == "__main__":
     # --- Launch with queue to serialize concurrent requests ---
     # default_concurrency_limit=1 prevents GPU/memory contention
-    demo.queue(default_concurrency_limit=1).launch()
+    demo.queue(default_concurrency_limit=1).launch(show_error=True)
