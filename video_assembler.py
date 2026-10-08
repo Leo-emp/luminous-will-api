@@ -300,6 +300,8 @@ def create_base_video(visual_timeline, total_duration, profile):
     graded_paths = []
     actual_duration = 0.0
 
+    import gc
+
     for idx, entry in enumerate(visual_timeline):
         needed = entry["duration"]
         if needed <= 0:
@@ -319,26 +321,42 @@ def create_base_video(visual_timeline, total_duration, profile):
 
             clip = clip.image_transform(grader)
 
+            # --- Use ultrafast preset + 1 thread for intermediates to reduce RAM ---
             clip.write_videofile(
                 graded_path, fps=profile["fps"], codec="libx264",
-                bitrate=bitrate, preset="fast", threads=2,
+                bitrate=bitrate, preset="ultrafast", threads=1,
                 audio=False, logger=None,
             )
             clip.close()
             del clip
+            # --- Force garbage collection between clips to free RAM ---
+            gc.collect()
             actual_duration += needed
             graded_paths.append(graded_path)
             print(f"[ASSEMBLER] Graded clip {idx+1}/{len(visual_timeline)}")
 
         except Exception as e:
             print(f"[ASSEMBLER] Error on clip {idx}: {e}")
-            black = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
-            blk = ImageClip(black).with_duration(needed)
-            blk.write_videofile(
-                graded_path, fps=profile["fps"], codec="libx264",
-                audio=False, logger=None,
-            )
-            blk.close()
+            # --- Write black frame via ffmpeg directly to avoid MoviePy memory overhead ---
+            try:
+                import imageio_ffmpeg
+                _ff = imageio_ffmpeg.get_ffmpeg_exe()
+                subprocess.run([
+                    _ff, "-y", "-f", "lavfi",
+                    "-i", f"color=c=black:s={frame_w}x{frame_h}:d={needed}:r={profile['fps']}",
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    "-an", graded_path,
+                ], capture_output=True, timeout=30)
+            except Exception:
+                black = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
+                blk = ImageClip(black).with_duration(needed)
+                blk.write_videofile(
+                    graded_path, fps=profile["fps"], codec="libx264",
+                    preset="ultrafast", threads=1,
+                    audio=False, logger=None,
+                )
+                blk.close()
+            gc.collect()
             actual_duration += needed
             graded_paths.append(graded_path)
 
@@ -356,10 +374,12 @@ def create_base_video(visual_timeline, total_duration, profile):
         clip = clip.image_transform(grader)
         clip.write_videofile(
             filler_path, fps=profile["fps"], codec="libx264",
-            bitrate=bitrate, preset="fast", threads=2,
+            bitrate=bitrate, preset="ultrafast", threads=1,
             audio=False, logger=None,
         )
         clip.close()
+        del clip
+        gc.collect()
         graded_paths.append(filler_path)
 
     # --- Concatenate via ffmpeg ---

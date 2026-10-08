@@ -93,29 +93,68 @@ def generate_video(topic, video_format_str="short", content_type_key=None, progr
     progress(0.05, desc=f"Generating {ct['name']} script...")
 
     # FIX 2: Use pick_unused_topic so every auto-generated video gets a fresh topic.
-    # Previously, when topic was None, generate_script did random.choice(ct["topics"])
-    # internally — meaning it could repeat any topic at random.
-    # Now we call pick_unused_topic BEFORE generate_script so the scheduler tracks
-    # exactly which topics have been used and never repeats one until all are exhausted.
     if not topic or topic.strip() == "":
-        # No topic specified — ask the scheduler for a never-used topic
         topic = pick_unused_topic(content_type_key)
 
-    script_segments, topic = generate_script(topic, video_format=fmt, content_type_key=content_type_key)
-    full_script = get_script_text(script_segments)
+    # --- Build topic-stable temp dir (no timestamp — survives retries) ---
+    # Prevents wasting ElevenLabs/Gemini credits when video assembly fails
+    # but voiceover/script were already generated successfully.
+    if topic:
+        safe_topic = topic.replace(" ", "_").replace("'", "")[:50]
+    else:
+        safe_topic = "_pending"
 
-    # --- Build unique temp folder for this video's working files ---
-    safe_topic = topic.replace(" ", "_").replace("'", "")[:50]
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    video_name = f"{safe_topic}_{timestamp}"
-    video_temp = os.path.join(config.TEMP_DIR, video_name)
+    video_temp = os.path.join(config.TEMP_DIR, f"{safe_topic}_{fmt.value}")
     os.makedirs(video_temp, exist_ok=True)
 
+    # --- Check for cached script segments from a previous failed run ---
+    script_cache_path = os.path.join(video_temp, "script_segments.json")
+    cached_script = None
+
+    if os.path.exists(script_cache_path):
+        try:
+            with open(script_cache_path, "r", encoding="utf-8") as f:
+                cached_data = json.load(f)
+            cached_script = cached_data.get("segments")
+            cached_topic = cached_data.get("topic", topic)
+            if cached_script and len(cached_script) > 2:
+                print(f"[SCRIPT] CACHED — reusing {len(cached_script)} segments for '{cached_topic}'")
+                script_segments = cached_script
+                topic = cached_topic
+            else:
+                cached_script = None
+        except Exception:
+            cached_script = None
+
+    if not cached_script:
+        # --- Generate fresh script (costs Gemini credits) ---
+        script_segments, topic = generate_script(topic, video_format=fmt, content_type_key=content_type_key)
+        # --- Update safe_topic now that we know the actual topic ---
+        safe_topic = topic.replace(" ", "_").replace("'", "")[:50]
+        real_temp = os.path.join(config.TEMP_DIR, f"{safe_topic}_{fmt.value}")
+        if real_temp != video_temp:
+            if os.path.exists(real_temp):
+                video_temp = real_temp
+            else:
+                os.rename(video_temp, real_temp)
+                video_temp = real_temp
+        # --- Cache script segments for retry ---
+        script_cache_path = os.path.join(video_temp, "script_segments.json")
+        with open(script_cache_path, "w", encoding="utf-8") as f:
+            json.dump({"topic": topic, "segments": script_segments}, f, indent=2)
+        print(f"[SCRIPT] Cached to {os.path.basename(script_cache_path)}")
+
+    full_script = get_script_text(script_segments)
+
     # --- ElevenLabs voiceover generation ---
+    # voiceover.py has its own cache check — stable dir means retries skip ElevenLabs
     progress(0.10, desc="Creating voiceover (ElevenLabs)...")
     voiceover_path = os.path.join(video_temp, "voiceover.mp3")
     word_timestamps = generate_voiceover(full_script, voiceover_path, profile=profile)
-    audio_duration = get_audio_duration(voiceover_path)
+    # --- Use trimmed voiceover if it exists (pause trimming creates _trimmed.mp3) ---
+    trimmed_path = voiceover_path.replace(".mp3", "_trimmed.mp3")
+    actual_voiceover = trimmed_path if os.path.exists(trimmed_path) else voiceover_path
+    audio_duration = get_audio_duration(actual_voiceover)
 
     # --- Download stock footage matching content type visual keywords ---
     progress(0.25, desc=f"Downloading {ct['name']} footage...")
@@ -135,11 +174,14 @@ def generate_video(topic, video_format_str="short", content_type_key=None, progr
 
     # --- Final assembly: stitch clips, voice, captions, music ---
     progress(0.55, desc="Assembling video...")
+    # --- Timestamp only on the output filename, not the work dir ---
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    video_name = f"{safe_topic}_{timestamp}"
     output_path = os.path.join(config.OUTPUT_DIR, f"{video_name}.mp4")
 
     assemble_video(
         clip_paths=clip_paths,
-        voiceover_path=voiceover_path,
+        voiceover_path=actual_voiceover,
         caption_events=caption_events,
         script_segments=script_segments,
         music_path=music_path,
@@ -174,6 +216,8 @@ def generate_video(topic, video_format_str="short", content_type_key=None, progr
         print(f"[METADATA] Skipped: {e}")
 
     # --- Remove temp working directory to free disk space ---
+    # Only clean up on SUCCESS — if the pipeline fails partway through,
+    # the cached voiceover + script stay for the retry run
     progress(0.95, desc="Cleaning up...")
     shutil.rmtree(video_temp, ignore_errors=True)
 
