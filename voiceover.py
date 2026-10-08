@@ -34,10 +34,48 @@ REQUEST_TIMEOUT = 30
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
+def _generate_edge_tts(text, output_path):
+    """
+    # Free fallback TTS using Microsoft Edge's engine
+    # No API key needed, decent quality, generates word timestamps
+    # Voice: en-US-GuyNeural (deep male, closest to ElevenLabs Adam)
+    """
+    import asyncio
+    import edge_tts
+
+    voice = "en-US-GuyNeural"
+    communicate = edge_tts.Communicate(text, voice, rate="-10%")
+
+    word_timestamps = []
+    audio_chunks = []
+
+    async def _run():
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_chunks.append(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                start_sec = chunk["offset"] / 10_000_000
+                duration_sec = chunk["duration"] / 10_000_000
+                word_timestamps.append({
+                    "word": chunk["text"],
+                    "start": start_sec,
+                    "end": start_sec + duration_sec,
+                })
+
+    asyncio.run(_run())
+
+    with open(output_path, "wb") as f:
+        for chunk in audio_chunks:
+            f.write(chunk)
+
+    print(f"[VOICEOVER] Edge TTS: generated {len(word_timestamps)} words")
+    return word_timestamps
+
+
 def generate_voiceover(script_text, output_path, profile=None):
     """
-    # Generates voiceover audio from script text using ElevenLabs
-    # Returns word-level timestamps for caption syncing
+    # Generates voiceover using ElevenLabs (primary) or Edge TTS (fallback)
+    # Caches voiceover: if output file already exists from a previous run, reuses it
     #
     # Args:
     #   script_text: full script as a single string
@@ -48,10 +86,24 @@ def generate_voiceover(script_text, output_path, profile=None):
     #   list of dicts with keys: word, start, end (times in seconds)
     """
 
+    # --- CACHE CHECK: reuse voiceover from a previous failed run ---
+    timestamps_path = output_path.replace(".mp3", "_timestamps.json")
+    trimmed_path = output_path.replace(".mp3", "_trimmed.mp3")
+
+    for cached_audio in [trimmed_path, output_path]:
+        if os.path.exists(cached_audio) and os.path.exists(timestamps_path):
+            try:
+                with open(timestamps_path, "r") as f:
+                    cached_words = json.load(f)
+                if cached_words and len(cached_words) > 5:
+                    print(f"[VOICEOVER] CACHED — reusing {os.path.basename(cached_audio)} ({len(cached_words)} words)")
+                    return cached_words
+            except Exception:
+                pass
+
     print("[VOICEOVER] Generating speech with ElevenLabs...")
 
     # --- Build the API request ---
-    # Using the "with timestamps" endpoint for word-level sync
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{config.ELEVENLABS_VOICE_ID}/with-timestamps"
 
     headers = {
@@ -59,7 +111,6 @@ def generate_voiceover(script_text, output_path, profile=None):
         "Content-Type": "application/json",
     }
 
-    # Use profile stability if provided, else default
     voice_settings = dict(config.VOICE_SETTINGS)
     if profile and "voice_stability" in profile:
         voice_settings["stability"] = profile["voice_stability"]
@@ -71,18 +122,19 @@ def generate_voiceover(script_text, output_path, profile=None):
         "speed": config.VOICE_SPEED,
     }
 
-    # --- Make the API call with retry logic ---
-    # We wrap the request in a retry loop so transient failures don't kill the pipeline.
-    # Each retry waits exponentially longer: 2s, 4s, 8s (RETRY_BASE_DELAY * 2^attempt).
-    # This gives ElevenLabs time to recover from rate limits or server issues.
     response = _call_elevenlabs_with_retry(url, headers, payload)
 
     if response.status_code != 200:
-        # If we get here after all retries, it's a non-retryable error (400/401/403)
-        # or we exhausted all retry attempts on a retryable error
-        print(f"[VOICEOVER] ERROR: API returned {response.status_code}")
+        print(f"[VOICEOVER] ERROR: ElevenLabs API returned {response.status_code}")
         print(f"[VOICEOVER] Response: {response.text}")
-        raise Exception(f"ElevenLabs API error: {response.status_code}")
+        # --- FALLBACK: use free Edge TTS instead of crashing ---
+        print("[VOICEOVER] Falling back to Edge TTS (free, no credits needed)...")
+        word_timestamps = _generate_edge_tts(script_text, output_path)
+        ts_path = output_path.replace(".mp3", "_timestamps.json")
+        with open(ts_path, "w") as f:
+            json.dump(word_timestamps, f, indent=2)
+        print(f"[VOICEOVER] Audio saved: {output_path}")
+        return word_timestamps
 
     # --- Parse the response ---
     # The response contains base64 audio and alignment data

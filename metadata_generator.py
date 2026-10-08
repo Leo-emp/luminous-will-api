@@ -123,14 +123,14 @@ OUTPUT: Respond with ONLY a valid JSON object — no markdown fences, no explana
             # New google.genai SDK — client-based approach
             client = genai.Client(api_key=config.GEMINI_API_KEY)
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.8-flash",
                 contents=prompt,
             )
             raw = response.text.strip()
         else:
             # Legacy google.generativeai SDK — still functional
             genai.configure(api_key=config.GEMINI_API_KEY)
-            model = genai.GenerativeModel("gemini-2.5-flash")
+            model = genai.GenerativeModel("gemini-3.8-flash")
             response = model.generate_content(prompt)
             raw = response.text.strip()
 
@@ -408,13 +408,13 @@ OUTPUT: Respond with ONLY valid JSON — no markdown fences.
         if _USING_NEW_SDK:
             client = genai.Client(api_key=config.GEMINI_API_KEY)
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.8-flash",
                 contents=prompt,
             )
             raw = response.text.strip()
         else:
             genai.configure(api_key=config.GEMINI_API_KEY)
-            model = genai.GenerativeModel("gemini-2.5-flash")
+            model = genai.GenerativeModel("gemini-3.8-flash")
             response = model.generate_content(prompt)
             raw = response.text.strip()
 

@@ -200,23 +200,17 @@ def _generate_punch_line(title):
         return _fallback()
 
     try:
-        import google.generativeai as genai
+        from google import genai
 
-        # Configure the Gemini SDK with our API key
-        genai.configure(api_key=config.GEMINI_API_KEY)
+        client = genai.Client(api_key=config.GEMINI_API_KEY)
 
-        # Use Gemini 2.5 Flash — fast and capable for short creative tasks
-        model = genai.GenerativeModel("gemini-2.5-flash")
-
-        # Prompt: strict instructions to get ONLY the punch line back
-        # No explanations, no quotes, just the 2-3 word phrase
         prompt = f"""Generate a 2-3 word punch line for a dark motivation video thumbnail.
 Topic: "{title}"
 Rules: ALL CAPS, maximum 3 words, punchy, emotional, commanding.
 Examples: "STAY SILENT", "COMFORT KILLS", "NEVER AVERAGE", "WALK ALONE"
 Respond with ONLY the punch line, nothing else."""
 
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(model="gemini-3.8-flash", contents=prompt)
         punch = response.text.strip().upper()
 
         # Sanitize: strip quotes, punctuation, limit to 3 words max

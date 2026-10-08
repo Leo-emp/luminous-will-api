@@ -1,7 +1,7 @@
 import random
 import json
 import config
-import google.generativeai as genai
+from google import genai
 
 # Import content type definitions — single source of truth for all 4 content types
 # get_content_type(key) returns the full config dict for that type
@@ -102,8 +102,7 @@ def generate_long_script(topic=None, content_type_key=None):
         print("[SCRIPT] WARNING: No Gemini API key, falling back to chained templates")
         return _chain_template_scripts(topic), topic
 
-    genai.configure(api_key=config.GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
 
     # Build a comma-separated string of preferred visual subjects for this content type
     visual_subjects = ", ".join(ct.get("visual_subjects", ["dark cinematic landscape"]))
@@ -160,7 +159,7 @@ VISUAL KEYWORDS ALT RULES:
 Generate the script now. 50 segments, JSON array only."""
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(model="gemini-3.8-flash", contents=prompt)
         raw_text = response.text.strip()
 
         # Strip markdown code fences if present
@@ -237,8 +236,7 @@ def enrich_visual_keywords(segments):
 
     print(f"[SCRIPT] Enriching {len(needs_enrichment)} segments with alt visual keywords...")
 
-    genai.configure(api_key=config.GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
 
     # --- Build the batch prompt with all segments that need alts ---
     segment_list = []
@@ -273,7 +271,7 @@ OUTPUT FORMAT — respond with ONLY a JSON array, no markdown:
 ]"""
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(model="gemini-3.8-flash", contents=prompt)
         raw_text = response.text.strip()
 
         # Strip markdown code fences if present

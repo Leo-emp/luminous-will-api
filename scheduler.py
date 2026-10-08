@@ -2,7 +2,7 @@ import os
 import json
 import random
 from datetime import datetime
-import google.generativeai as genai
+from google import genai
 import config
 # Only get_content_type and get_all_topics are used here; CONTENT_TYPES was removed (dead import)
 from content_types import get_content_type, get_all_topics
@@ -130,8 +130,7 @@ def _generate_new_topics(type_key, used_topics):
     content_type = get_content_type(type_key)
     used_list = list(used_topics)
 
-    genai.configure(api_key=config.GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
 
     prompt = f"""You generate video topics for the YouTube channel "Luminous Will".
 
@@ -152,7 +151,7 @@ Respond with ONLY a JSON array of 10 strings, no markdown:
 ["Topic 1", "Topic 2", ...]"""
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(model="gemini-3.8-flash", contents=prompt)
         raw_text = response.text.strip()
 
         # Strip markdown code fences if present
