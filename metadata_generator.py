@@ -21,16 +21,8 @@ import config
 #   - Hashtags: mix broad viral + niche dark motivation
 # ============================================================
 
-# Try the new google.genai SDK first; fall back to legacy if unavailable.
-# The legacy google.generativeai package is deprecated and will eventually
-# stop receiving updates — the new google.genai package is the replacement.
-try:
-    import google.genai as genai
-    _USING_NEW_SDK = True
-except ImportError:
-    # Legacy fallback — still functional but shows FutureWarning
-    import google.generativeai as genai  # type: ignore
-    _USING_NEW_SDK = False
+# New google-genai SDK — the old google-generativeai is deprecated
+from google import genai
 
 
 def generate_metadata(topic, script_segments, video_format, chapters=None):
@@ -118,21 +110,12 @@ OUTPUT: Respond with ONLY a valid JSON object — no markdown fences, no explana
 
     try:
         # ----- Call Gemini -----
-        # Use new SDK if available, otherwise use legacy
-        if _USING_NEW_SDK:
-            # New google.genai SDK — client-based approach
-            client = genai.Client(api_key=config.GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt,
-            )
-            raw = response.text.strip()
-        else:
-            # Legacy google.generativeai SDK — still functional
-            genai.configure(api_key=config.GEMINI_API_KEY)
-            model = genai.GenerativeModel("gemini-3.8-flash")
-            response = model.generate_content(prompt)
-            raw = response.text.strip()
+        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-3.8-flash",
+            contents=prompt,
+        )
+        raw = response.text.strip()
 
         # Strip markdown code fences if Gemini wraps the JSON anyway
         # (happens occasionally even when we ask it not to)
@@ -405,18 +388,12 @@ OUTPUT: Respond with ONLY valid JSON — no markdown fences.
 }}"""
 
     try:
-        if _USING_NEW_SDK:
-            client = genai.Client(api_key=config.GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt,
-            )
-            raw = response.text.strip()
-        else:
-            genai.configure(api_key=config.GEMINI_API_KEY)
-            model = genai.GenerativeModel("gemini-3.8-flash")
-            response = model.generate_content(prompt)
-            raw = response.text.strip()
+        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-3.8-flash",
+            contents=prompt,
+        )
+        raw = response.text.strip()
 
         if raw.startswith("```"):
             raw = "\n".join(raw.split("\n")[1:])

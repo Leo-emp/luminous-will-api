@@ -34,10 +34,11 @@ def validate_setup():
     # --- Check API keys before starting ---
     # Without these keys the pipeline cannot run at all
     errors = []
-    if not config.ELEVENLABS_API_KEY:
-        errors.append("ELEVENLABS_API_KEY not set (add it in HF Space Secrets)")
+    if not config.GEMINI_API_KEY:
+        errors.append("GEMINI_API_KEY not set (add it in HF Space Secrets)")
     if not config.PEXELS_API_KEY:
         errors.append("PEXELS_API_KEY not set (add it in HF Space Secrets)")
+    # # ElevenLabs is optional — Edge TTS fallback handles it
     if errors:
         return False, "\n".join(errors)
     # --- Create required directories if missing ---
@@ -296,8 +297,29 @@ with gr.Blocks(
             topic = dropdown_topic
         # None at this point means generate_video will pick randomly
         fmt_str = "long" if "Long" in format_choice else "short"
-        # Pass content_type_key so the right visual style is applied
-        return generate_video(topic, fmt_str, content_type_key=content_type_key, progress=progress)
+        # --- Wrap the full pipeline in try/catch ---
+        # Without this, any crash (Gemini API error, missing file, MoviePy OOM)
+        # propagates as an opaque "An error occurred" to the dashboard.
+        # With this, the user sees WHAT actually broke.
+        try:
+            return generate_video(topic, fmt_str, content_type_key=content_type_key, progress=progress)
+        except gr.Error:
+            # # gr.Error already has a user-friendly message, re-raise as-is
+            raise
+        except Exception as e:
+            # # Convert raw Python exceptions to clear Gradio errors
+            error_msg = str(e)
+            # # Tag the error with which pipeline step likely failed
+            if "genai" in error_msg.lower() or "gemini" in error_msg.lower() or "404" in error_msg:
+                raise gr.Error(f"Script generation failed (Gemini API): {error_msg}")
+            elif "elevenlabs" in error_msg.lower() or "quota" in error_msg.lower():
+                raise gr.Error(f"Voiceover failed (ElevenLabs): {error_msg}")
+            elif "pexels" in error_msg.lower() or "pixabay" in error_msg.lower():
+                raise gr.Error(f"Footage download failed: {error_msg}")
+            elif "moviepy" in error_msg.lower() or "ffmpeg" in error_msg.lower():
+                raise gr.Error(f"Video assembly failed (MoviePy): {error_msg}")
+            else:
+                raise gr.Error(f"Pipeline error: {error_msg}")
 
     # --- Connect generate button to pipeline ---
     # Note: content_type_dropdown is now the first input (added in Task 7)
